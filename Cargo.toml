@@ -38,6 +38,8 @@ server-local = ["dep:rusqlite"]
 storage = ["storage-sqlite"]
 # Support for SQLite task storage
 storage-sqlite = ["dep:rusqlite"]
+# Support for PowerSync task storage
+storage-powersync = ["dep:rusqlite"]
 # Support for IndexedDB task storage
 storage-indexeddb = ["dep:idb", "dep:web-sys"]
 
