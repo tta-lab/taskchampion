@@ -1,3 +1,4 @@
+use anyhow::Context;
 use chrono::DateTime;
 use uuid::Uuid;
 
@@ -72,7 +73,7 @@ pub(super) fn raw_to_task(raw: RawTaskRow) -> Result<(Uuid, TaskMap)> {
     let uuid = Uuid::parse_str(&raw.id)
         .map_err(|e| Error::Database(format!("Invalid UUID in tc_tasks: {e}")))?;
     let mut task_map: TaskMap = serde_json::from_str(&raw.data)
-        .map_err(|e| Error::Database(format!("Failed to parse task data: {e}")))?;
+        .map_err(|e| Error::Database(format!("Failed to parse task data for task {uuid}: {e}")))?;
 
     // Inject string columns back into the task map.
     if let Some(v) = raw.status {
@@ -91,7 +92,7 @@ pub(super) fn raw_to_task(raw: RawTaskRow) -> Result<(Uuid, TaskMap)> {
         task_map.insert("project".into(), v);
     }
 
-    // Inject timestamp columns (ISO 8601 → epoch string).
+    // Inject timestamp columns (ISO 8601 → epoch string) back into the task map.
     // An ISO value present in the DB but failing to parse is a data integrity error.
     for (col_val, taskmap_key) in [
         (raw.entry_at, "entry"),
@@ -105,7 +106,7 @@ pub(super) fn raw_to_task(raw: RawTaskRow) -> Result<(Uuid, TaskMap)> {
         if let Some(iso) = col_val {
             let epoch = iso_to_epoch(&iso).ok_or_else(|| {
                 Error::Database(format!(
-                    "Malformed ISO timestamp in column {taskmap_key}_at: {iso:?}"
+                    "Malformed ISO timestamp in column {taskmap_key}_at for task {uuid}: {iso:?}"
                 ))
             })?;
             task_map.insert(taskmap_key.into(), epoch);
@@ -126,7 +127,9 @@ pub(super) fn query_task_rows(
     sql: &str,
     params: impl rusqlite::Params,
 ) -> Result<Vec<(Uuid, TaskMap)>> {
-    let mut q = t.prepare(sql)?;
+    let mut q = t
+        .prepare(sql)
+        .with_context(|| format!("Preparing query: {sql}"))?;
     let rows: Vec<RawTaskRow> = q
         .query_map(params, read_raw_task_row)?
         .collect::<std::result::Result<_, _>>()?;
@@ -184,7 +187,8 @@ mod tests {
         let mut map = TaskMap::new();
         map.insert("entry".into(), "1724612771".into());
         let result = extract_timestamp(&mut map, "entry").unwrap();
-        assert!(result.is_some());
+        let iso = result.expect("should return Some ISO string");
+        assert_eq!(iso, epoch_to_iso("1724612771").unwrap());
         assert!(
             !map.contains_key("entry"),
             "key should be removed after extraction"
@@ -287,6 +291,14 @@ mod tests {
         let uuid = Uuid::new_v4();
         let mut raw = make_empty_raw(&uuid);
         raw.data = "not json".to_string();
+        assert!(raw_to_task(raw).is_err());
+    }
+
+    #[test]
+    fn raw_to_task_invalid_iso_timestamp() {
+        let uuid = Uuid::new_v4();
+        let mut raw = make_empty_raw(&uuid);
+        raw.entry_at = Some("not-an-iso".to_string());
         assert!(raw_to_task(raw).is_err());
     }
 }
