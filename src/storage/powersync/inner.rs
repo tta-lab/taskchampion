@@ -5,10 +5,37 @@ use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::DateTime;
-use powersync_core::powersync_init_static;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use std::ffi::c_int;
 use std::path::Path;
+use std::sync::Once;
 use uuid::Uuid;
+
+// The PowerSync C extension is statically linked via powersync_sqlite_nostd.
+// We only need one entry point: powersync_init_static() registers the extension
+// as a SQLite auto-extension so it fires on every subsequent Connection::open().
+unsafe extern "C" {
+    fn powersync_init_static() -> c_int;
+}
+
+static POWERSYNC_EXTENSION: Once = Once::new();
+
+/// Register the PowerSync SQLite auto-extension exactly once per process.
+/// Returns Err if the extension registration fails.
+fn init_powersync_extension() -> Result<()> {
+    let mut rc = 0i32;
+    POWERSYNC_EXTENSION.call_once(|| {
+        // SAFETY: powersync_init_static calls sqlite3_auto_extension, which is
+        // safe to call from a single thread (Once guarantees single execution).
+        rc = unsafe { powersync_init_static() };
+    });
+    if rc != 0 {
+        return Err(Error::Database(format!(
+            "Failed to load PowerSync extension (rc={rc})"
+        )));
+    }
+    Ok(())
+}
 
 /// Convert Unix epoch string (e.g. "1724612771") to ISO 8601 string.
 fn epoch_to_iso(epoch_str: &str) -> Option<String> {
@@ -134,18 +161,13 @@ pub(super) struct PowerSyncStorageInner {
 impl PowerSyncStorageInner {
     /// Open an existing PowerSync-managed database file and create local-only tables.
     pub(super) fn new(db_path: &Path, user_id: Uuid) -> Result<Self> {
-        // Register the PowerSync extension as a SQLite auto-extension.
-        // Safe to call multiple times — subsequent calls are no-ops.
-        let rc = powersync_init_static();
-        if rc != 0 {
-            return Err(Error::Database(format!(
-                "Failed to load PowerSync extension (rc={rc})"
-            )));
-        }
+        // Register the PowerSync extension as a SQLite auto-extension (once per process).
+        init_powersync_extension()?;
 
         // Open the connection. The auto-extension fires on open, registering all
         // PowerSync functions (powersync_strip_subtype, etc.).
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open(db_path)
+            .context("Opening PowerSync database (auto-extension init fires here)")?;
 
         // Verify the DB has been initialized by flicknote-sync (tc_tasks view must exist).
         let has_tc_tasks: bool = conn
@@ -181,25 +203,14 @@ impl PowerSyncStorageInner {
             .query_row([], |_| Ok(()))
             .context("PowerSync init")?;
 
-        // Create local-only tables that PowerSync doesn't manage.
+        // tc_sync_meta is the only local-only table we need.
+        // tc_tasks and tc_operations are PowerSync-managed views.
+        // tc_working_set and tc_operations_sync are not used (PowerSync handles sync).
         conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS tc_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                data TEXT NOT NULL,
-                synced BOOLEAN NOT NULL DEFAULT false,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS tc_working_set (
-                id INTEGER PRIMARY KEY,
-                uuid TEXT
-            );
-            CREATE TABLE IF NOT EXISTS tc_sync_meta (
+            "CREATE TABLE IF NOT EXISTS tc_sync_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
-            );
-        ",
+            );",
         )
         .context("Creating local-only tables")?;
 
@@ -233,12 +244,7 @@ impl PowerSyncStorageInner {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
                 data TEXT NOT NULL,
-                synced BOOLEAN NOT NULL DEFAULT false,
                 created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS tc_working_set (
-                id INTEGER PRIMARY KEY,
-                uuid TEXT
             );
             CREATE TABLE IF NOT EXISTS tc_sync_meta (
                 key TEXT PRIMARY KEY,
@@ -285,18 +291,6 @@ impl<'t> PowerSyncTxn<'t> {
             .ok_or_else(|| Error::Database("Transaction already committed".into()))
     }
 
-    fn get_next_working_set_number(&self) -> Result<usize> {
-        let t = self.get_txn()?;
-        let next_id: Option<usize> = t
-            .query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM tc_working_set",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .context("Getting highest working set ID")?;
-        Ok(next_id.unwrap_or(0))
-    }
 }
 
 #[async_trait(?Send)]
@@ -550,32 +544,14 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         Ok(ret)
     }
 
-    async fn unsynced_operations(&mut self) -> Result<Vec<Operation>> {
-        let raw: Vec<String> = {
-            let t = self.get_txn()?;
-            let mut q =
-                t.prepare("SELECT data FROM tc_operations WHERE synced = false ORDER BY id ASC")?;
-            let rows = q.query_map([], |r| r.get::<_, String>("data"))?;
-            rows.collect::<std::result::Result<_, _>>()?
-        };
+    // PowerSync handles sync externally via flicknote-sync; these methods are no-ops.
 
-        let mut ret = vec![];
-        for data_str in raw {
-            let op: Operation = serde_json::from_str(&data_str)
-                .map_err(|e| Error::Database(format!("Failed to parse operation: {e}")))?;
-            ret.push(op);
-        }
-        Ok(ret)
+    async fn unsynced_operations(&mut self) -> Result<Vec<Operation>> {
+        Ok(vec![])
     }
 
     async fn num_unsynced_operations(&mut self) -> Result<usize> {
-        let t = self.get_txn()?;
-        let count: usize = t.query_row(
-            "SELECT COUNT(*) FROM tc_operations WHERE synced = false",
-            [],
-            |x| x.get(0),
-        )?;
-        Ok(count)
+        Ok(0)
     }
 
     async fn add_operation(&mut self, op: Operation) -> Result<()> {
@@ -594,7 +570,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let last: Option<(i64, String)> = {
             let t = self.get_txn()?;
             t.query_row(
-                "SELECT id, data FROM tc_operations WHERE synced = false ORDER BY id DESC LIMIT 1",
+                "SELECT id, data FROM tc_operations ORDER BY id DESC LIMIT 1",
                 [],
                 |x| Ok((x.get(0)?, x.get(1)?)),
             )
@@ -602,7 +578,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         };
 
         let Some((last_id, last_data)) = last else {
-            return Err(Error::Database("No unsynced operations to remove".into()));
+            return Err(Error::Database("No operations to remove".into()));
         };
 
         let last_op: Operation = serde_json::from_str(&last_data)
@@ -618,108 +594,28 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let t = self.get_txn()?;
         t.execute("DELETE FROM tc_operations WHERE id = ?", [last_id])
             .context("Remove operation")?;
-
         Ok(())
     }
 
-    /// Mark all unsynced operations as synced and delete operations for tasks that no longer exist.
-    /// Changes are not persisted until `commit()` is called.
     async fn sync_complete(&mut self) -> Result<()> {
-        let t = self.get_txn()?;
-
-        // Mark all locally-tracked operations as synced.
-        t.execute(
-            "UPDATE tc_operations SET synced = true WHERE synced = false",
-            [],
-        )
-        .context("Marking operations as synced")?;
-
-        // Delete operations for non-existent (deleted) tasks.
-        // UndoPoint operations (where all json_extract paths return NULL) are excluded.
-        t.execute(
-            r#"DELETE FROM tc_operations WHERE id IN (
-                SELECT o.id FROM tc_operations o
-                LEFT JOIN tc_tasks t ON t.id = coalesce(
-                    json_extract(o.data, '$.Create.uuid'),
-                    json_extract(o.data, '$.Update.uuid'),
-                    json_extract(o.data, '$.Delete.uuid')
-                )
-                WHERE t.id IS NULL
-                AND coalesce(
-                    json_extract(o.data, '$.Create.uuid'),
-                    json_extract(o.data, '$.Update.uuid'),
-                    json_extract(o.data, '$.Delete.uuid')
-                ) IS NOT NULL
-            )"#,
-            [],
-        )
-        .context("Deleting orphaned operations")?;
-
         Ok(())
     }
+
+    // Working set is not used with PowerSync; task numbering is not meaningful here.
 
     async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        let t = self.get_txn()?;
-        let mut q = t.prepare("SELECT id, uuid FROM tc_working_set ORDER BY id ASC")?;
-        let rows = q
-            .query_map([], |r| {
-                Ok((r.get::<_, usize>("id")?, r.get::<_, String>("uuid")?))
-            })
-            .context("Get working set query")?;
-        let rows: Vec<std::result::Result<(usize, String), _>> = rows.collect();
-
-        let mut res = Vec::new();
-        for _ in 0..self
-            .get_next_working_set_number()
-            .context("Getting working set number")?
-        {
-            res.push(None);
-        }
-
-        for r in rows {
-            let (id, uuid_str) = r?;
-            let uuid = Uuid::parse_str(&uuid_str)
-                .map_err(|e| Error::Database(format!("Invalid UUID in working set: {e}")))?;
-            if id >= res.len() {
-                return Err(Error::Database(format!(
-                    "Working set id {id} is out of range ({} slots allocated)",
-                    res.len()
-                )));
-            }
-            res[id] = Some(uuid);
-        }
-
-        Ok(res)
+        Ok(vec![])
     }
 
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        let next_id = self.get_next_working_set_number()?;
-        let t = self.get_txn()?;
-        t.execute(
-            "INSERT INTO tc_working_set (id, uuid) VALUES (?, ?)",
-            params![next_id, &uuid.to_string()],
-        )
-        .context("Add to working set query")?;
-        Ok(next_id)
+    async fn add_to_working_set(&mut self, _uuid: Uuid) -> Result<usize> {
+        Ok(0)
     }
 
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()> {
-        let t = self.get_txn()?;
-        match uuid {
-            Some(uuid) => t.execute(
-                "INSERT OR REPLACE INTO tc_working_set (id, uuid) VALUES (?, ?)",
-                params![index, &uuid.to_string()],
-            ),
-            None => t.execute("DELETE FROM tc_working_set WHERE id = ?", [index]),
-        }
-        .context("Set working set item query")?;
+    async fn set_working_set_item(&mut self, _index: usize, _uuid: Option<Uuid>) -> Result<()> {
         Ok(())
     }
 
     async fn clear_working_set(&mut self) -> Result<()> {
-        let t = self.get_txn()?;
-        t.execute("DELETE FROM tc_working_set", [])
-            .context("Clear working set query")?;
         Ok(())
     }
 
