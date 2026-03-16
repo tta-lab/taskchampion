@@ -4,7 +4,7 @@ use crate::storage::send_wrapper::{WrappedStorage, WrappedStorageTxn};
 use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 use uuid::Uuid;
@@ -17,7 +17,7 @@ use super::extension::init_powersync_extension;
 const TS_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
 pub(super) struct PowerSyncStorageInner {
-    conn: Connection,
+    pub(super) conn: Connection,
     user_id: Uuid,
 }
 
@@ -107,6 +107,20 @@ impl PowerSyncStorageInner {
                 name TEXT,
                 user_id TEXT,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+            );
+            CREATE TABLE IF NOT EXISTS tc_tags (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT,
+                name TEXT NOT NULL,
+                UNIQUE (task_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS tc_annotations (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                user_id TEXT,
+                entry_at TEXT NOT NULL,
+                description TEXT NOT NULL
             );
         ",
         )
@@ -484,3 +498,4 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         Ok(())
     }
 }
+
