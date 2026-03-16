@@ -4,6 +4,7 @@ use crate::storage::send_wrapper::{WrappedStorage, WrappedStorageTxn};
 use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
 use async_trait::async_trait;
+use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 use uuid::Uuid;
@@ -12,6 +13,8 @@ use super::columns::{
     extract_timestamp, query_task_rows, raw_to_task, read_raw_task_row, TASK_SELECT_COLS,
 };
 use super::extension::init_powersync_extension;
+
+const TS_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
 pub(super) struct PowerSyncStorageInner {
     conn: Connection,
@@ -94,16 +97,16 @@ impl PowerSyncStorageInner {
                 project_id TEXT
             );
             CREATE TABLE IF NOT EXISTS tc_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 user_id TEXT,
                 data TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             );
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 user_id TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             );
         ",
         )
@@ -154,25 +157,23 @@ impl<'t> PowerSyncTxn<'t> {
             return Ok(id);
         }
 
+        // INSTEAD OF triggers on PowerSync views report 0 rows changed,
+        // so we can't rely on t.changes() to detect INSERT OR IGNORE behavior.
         let new_id = Uuid::new_v4().to_string();
         t.execute(
             "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
             params![&new_id, name, &self.user_id.to_string()],
         )?;
 
-        // If INSERT was ignored (PK collision, astronomically unlikely with UUIDs),
-        // re-query to get the authoritative ID rather than returning a dangling ref.
-        if t.changes() == 0 {
-            t.query_row(
-                "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
-                [name],
-                |r| r.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| Error::Database(format!("Failed to resolve project id for {name:?}")))
-        } else {
-            Ok(new_id)
-        }
+        // Re-query to get the authoritative ID — either the one we just inserted
+        // or the existing one if INSERT was ignored.
+        t.query_row(
+            "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
+            [name],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| Error::Database(format!("Failed to resolve project id for {name:?}")))
     }
 }
 
@@ -253,10 +254,20 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
 
         // PowerSync views don't support UPSERT (INSERT ... ON CONFLICT DO UPDATE).
-        // Use UPDATE-then-INSERT: try UPDATE first, INSERT if row doesn't exist.
+        // INSTEAD OF triggers also report 0 rows changed regardless of success,
+        // so we check existence with SELECT, then INSERT or UPDATE accordingly.
         let t = self.get_txn()?;
-        let updated = t
-            .execute(
+        let uuid_str = uuid.to_string();
+        let exists: bool = t
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tc_tasks WHERE id = ?)",
+                [&uuid_str],
+                |row| row.get(0),
+            )
+            .context("Set task existence check")?;
+
+        if exists {
+            t.execute(
                 "UPDATE tc_tasks SET
                    user_id = ?, data = ?, status = ?, description = ?, priority = ?,
                    entry_at = ?, modified_at = ?, due_at = ?, scheduled_at = ?,
@@ -277,61 +288,57 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                     &wait_at,
                     &parent_id,
                     &project_id,
-                    &uuid.to_string(),
+                    &uuid_str,
                 ],
             )
             .context("Set task UPDATE query")?;
-
-        match updated {
-            1 => {}
-            0 => {
-                let inserted = t
-                    .execute(
-                        "INSERT INTO tc_tasks
-                         (id, user_id, data, status, description, priority,
-                          entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
-                          parent_id, project_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        params![
-                            &uuid.to_string(),
-                            &self.user_id.to_string(),
-                            &data_str,
-                            &status,
-                            &description,
-                            &priority,
-                            &entry_at,
-                            &modified_at,
-                            &due_at,
-                            &scheduled_at,
-                            &start_at,
-                            &end_at,
-                            &wait_at,
-                            &parent_id,
-                            &project_id,
-                        ],
-                    )
-                    .context("Set task INSERT query")?;
-                if inserted != 1 {
-                    return Err(Error::Database(format!(
-                        "Set task INSERT wrote {inserted} rows for uuid={uuid}; expected 1"
-                    )));
-                }
-            }
-            n => {
-                return Err(Error::Database(format!(
-                    "Set task UPDATE affected {n} rows for uuid={uuid}; expected 0 or 1"
-                )));
-            }
+        } else {
+            t.execute(
+                "INSERT INTO tc_tasks
+                 (id, user_id, data, status, description, priority,
+                  entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
+                  parent_id, project_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    &uuid_str,
+                    &self.user_id.to_string(),
+                    &data_str,
+                    &status,
+                    &description,
+                    &priority,
+                    &entry_at,
+                    &modified_at,
+                    &due_at,
+                    &scheduled_at,
+                    &start_at,
+                    &end_at,
+                    &wait_at,
+                    &parent_id,
+                    &project_id,
+                ],
+            )
+            .context("Set task INSERT query")?;
         }
         Ok(())
     }
 
     async fn delete_task(&mut self, uuid: Uuid) -> Result<bool> {
         let t = self.get_txn()?;
-        let changed = t
-            .execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid.to_string()])
-            .context("Delete task query")?;
-        Ok(changed > 0)
+        let uuid_str = uuid.to_string();
+        // INSTEAD OF triggers on PowerSync views report 0 rows changed,
+        // so check existence before DELETE to return the correct boolean.
+        let exists: bool = t
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tc_tasks WHERE id = ?)",
+                [&uuid_str],
+                |row| row.get(0),
+            )
+            .context("Delete task existence check")?;
+        if exists {
+            t.execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid_str])
+                .context("Delete task query")?;
+        }
+        Ok(exists)
     }
 
     async fn all_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
@@ -393,12 +400,24 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn add_operation(&mut self, op: Operation) -> Result<()> {
+        // Only Update carries a timestamp; Create, Delete, and UndoPoint don't have one.
+        let created_at = match &op {
+            Operation::Update { timestamp, .. } => timestamp.format(TS_FMT).to_string(),
+            Operation::Create { .. } | Operation::Delete { .. } | Operation::UndoPoint => {
+                Utc::now().format(TS_FMT).to_string()
+            }
+        };
         let data_str = serde_json::to_string(&op)
             .map_err(|e| Error::Database(format!("Failed to serialize operation: {e}")))?;
         let t = self.get_txn()?;
         t.execute(
-            "INSERT INTO tc_operations (user_id, data) VALUES (?, ?)",
-            params![&self.user_id.to_string(), &data_str],
+            "INSERT INTO tc_operations (id, user_id, data, created_at) VALUES (?, ?, ?, ?)",
+            params![
+                &Uuid::now_v7().to_string(),
+                &self.user_id.to_string(),
+                &data_str,
+                &created_at
+            ],
         )
         .context("Add operation query")?;
         Ok(())
@@ -406,7 +425,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
     async fn remove_operation(&mut self, op: Operation) -> Result<()> {
         let t = self.get_txn()?;
-        let last: Option<(i64, String)> = t
+        let last: Option<(String, String)> = t
             .query_row(
                 "SELECT id, data FROM tc_operations ORDER BY id DESC LIMIT 1",
                 [],
@@ -429,7 +448,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         }
 
         let t = self.get_txn()?;
-        t.execute("DELETE FROM tc_operations WHERE id = ?", [last_id])
+        t.execute("DELETE FROM tc_operations WHERE id = ?", [&last_id])
             .context("Remove operation")?;
         Ok(())
     }
