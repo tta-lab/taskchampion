@@ -326,4 +326,57 @@ mod test {
         txn.commit().await?;
         Ok(())
     }
+
+    /// Verify that all_tasks merges tag_* and annotation_* from their side tables.
+    /// Covers the bulk-read merge path independently of get_task.
+    #[tokio::test]
+    async fn test_all_tasks_includes_tags_and_annotations() -> Result<()> {
+        let mut storage = PowerSyncStorageInner::new_for_test()?;
+        let uuid = Uuid::new_v4();
+
+        {
+            let mut txn = storage.txn().await?;
+            txn.create_task(uuid).await?;
+            let mut task = TaskMap::new();
+            task.insert("status".into(), "pending".into());
+            task.insert("tag_home".into(), String::new());
+            task.insert("annotation_1635301873".into(), "buy milk".into());
+            txn.set_task(uuid, task).await?;
+            txn.commit().await?;
+        }
+
+        let mut txn = storage.txn().await?;
+        let all = txn.all_tasks().await?;
+        txn.commit().await?;
+
+        let (_, task_map) = all.into_iter().find(|(u, _)| *u == uuid).expect("task not found");
+        assert_eq!(task_map.get("tag_home").map(String::as_str), Some(""));
+        assert_eq!(
+            task_map.get("annotation_1635301873").map(String::as_str),
+            Some("buy milk")
+        );
+        Ok(())
+    }
+
+    /// Verify that set_task returns an error for an annotation key with a non-integer epoch suffix
+    /// rather than silently leaving it in the data blob.
+    #[tokio::test]
+    async fn test_set_task_rejects_invalid_annotation_epoch() -> Result<()> {
+        let mut storage = PowerSyncStorageInner::new_for_test()?;
+        let uuid = Uuid::new_v4();
+
+        let mut txn = storage.txn().await?;
+        txn.create_task(uuid).await?;
+        let mut task = TaskMap::new();
+        task.insert("annotation_not_an_epoch".into(), "oops".into());
+        let result = txn.set_task(uuid, task).await;
+        assert!(result.is_err(), "expected error for non-integer annotation epoch");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("epoch suffix is not an integer"),
+            "unexpected error message: {msg}"
+        );
+        txn.commit().await?;
+        Ok(())
+    }
 }

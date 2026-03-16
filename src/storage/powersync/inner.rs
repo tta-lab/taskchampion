@@ -44,11 +44,12 @@ fn merge_tags_annotations(
         .context("Query annotations")?;
     for row in ann_rows {
         let (entry_at_iso, description) = row?;
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&entry_at_iso) {
-            let epoch = dt.timestamp();
-            task_map.insert(format!("annotation_{epoch}"), description);
-        }
-        // Invalid ISO timestamps are silently skipped
+        let dt = DateTime::parse_from_rfc3339(&entry_at_iso).map_err(|e| {
+            Error::Database(format!(
+                "Invalid annotation timestamp for task {task_id}: {entry_at_iso:?}: {e}"
+            ))
+        })?;
+        task_map.insert(format!("annotation_{}", dt.timestamp()), description);
     }
 
     Ok(())
@@ -263,7 +264,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         );
         let mut tasks = query_task_rows(t, &sql, [])?;
         for (uuid, task_map) in &mut tasks {
-            merge_tags_annotations(t, &uuid.to_string(), task_map)?;
+            let uuid_str = uuid.to_string();
+            merge_tags_annotations(t, &uuid_str, task_map)?;
         }
         Ok(tasks)
     }
@@ -326,19 +328,27 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .collect();
 
         // Extract annotations (annotation_<epoch> → description) before serializing data blob.
-        let annotations: Vec<(i64, String)> = task_data
+        // Always remove annotation keys from task_data (even on error), then validate the epoch.
+        // An unparseable suffix is a data-integrity error — propagate rather than leave a
+        // stale key in the blob.
+        let annotation_keys: Vec<String> = task_data
             .keys()
             .filter(|k| k.starts_with("annotation_"))
             .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter_map(|k| {
-                let epoch_str = k.strip_prefix("annotation_")?;
-                let epoch: i64 = epoch_str.parse().ok()?;
-                let desc = task_data.remove(&k)?;
-                Some((epoch, desc))
-            })
             .collect();
+        let annotations: Vec<(i64, String)> = annotation_keys
+            .into_iter()
+            .map(|k| {
+                let desc = task_data.remove(&k).unwrap_or_default();
+                let epoch_str = k.strip_prefix("annotation_").unwrap();
+                let epoch: i64 = epoch_str.parse().map_err(|_| {
+                    Error::Database(format!(
+                        "Invalid annotation key {k:?}: epoch suffix is not an integer"
+                    ))
+                })?;
+                Ok((epoch, desc))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let data_str = serde_json::to_string(&task_data)
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
@@ -487,7 +497,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         );
         let mut tasks = query_task_rows(t, &sql, [])?;
         for (uuid, task_map) in &mut tasks {
-            merge_tags_annotations(t, &uuid.to_string(), task_map)?;
+            let uuid_str = uuid.to_string();
+            merge_tags_annotations(t, &uuid_str, task_map)?;
         }
         Ok(tasks)
     }
