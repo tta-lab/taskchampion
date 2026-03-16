@@ -468,10 +468,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn delete_task(&mut self, uuid: Uuid) -> Result<bool> {
         let t = self.get_txn()?;
         let changed = t
-            .execute(
-                "DELETE FROM tc_tasks WHERE id = ?",
-                [&uuid.to_string()],
-            )
+            .execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid.to_string()])
             .context("Delete task query")?;
         Ok(changed > 0)
     }
@@ -499,8 +496,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let mut ret = vec![];
         for r in raw {
             let s = r?;
-            let uuid = Uuid::parse_str(&s)
-                .map_err(|e| Error::Database(format!("Invalid UUID: {e}")))?;
+            let uuid =
+                Uuid::parse_str(&s).map_err(|e| Error::Database(format!("Invalid UUID: {e}")))?;
             ret.push(uuid);
         }
         Ok(ret)
@@ -665,7 +662,9 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let t = self.get_txn()?;
         let mut q = t.prepare("SELECT id, uuid FROM tc_working_set ORDER BY id ASC")?;
         let rows = q
-            .query_map([], |r| Ok((r.get::<_, usize>("id")?, r.get::<_, String>("uuid")?)))
+            .query_map([], |r| {
+                Ok((r.get::<_, usize>("id")?, r.get::<_, String>("uuid")?))
+            })
             .context("Get working set query")?;
         let rows: Vec<std::result::Result<(usize, String), _>> = rows.collect();
 
@@ -711,10 +710,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                 "INSERT OR REPLACE INTO tc_working_set (id, uuid) VALUES (?, ?)",
                 params![index, &uuid.to_string()],
             ),
-            None => t.execute(
-                "DELETE FROM tc_working_set WHERE id = ?",
-                [index],
-            ),
+            None => t.execute("DELETE FROM tc_working_set WHERE id = ?", [index]),
         }
         .context("Set working set item query")?;
         Ok(())

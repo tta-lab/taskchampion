@@ -95,7 +95,15 @@ mod test {
         let uuid = Uuid::new_v4();
         let epoch = "1724612771";
         let mut task: TaskMap = TaskMap::new();
-        for key in ["entry", "modified", "due", "scheduled", "start", "end", "wait"] {
+        for key in [
+            "entry",
+            "modified",
+            "due",
+            "scheduled",
+            "start",
+            "end",
+            "wait",
+        ] {
             task.insert(key.into(), epoch.into());
         }
 
@@ -105,7 +113,15 @@ mod test {
 
         let mut txn = storage.txn().await?;
         let got = txn.get_task(uuid).await?.expect("task should exist");
-        for key in ["entry", "modified", "due", "scheduled", "start", "end", "wait"] {
+        for key in [
+            "entry",
+            "modified",
+            "due",
+            "scheduled",
+            "start",
+            "end",
+            "wait",
+        ] {
             assert_eq!(
                 got.get(key).map(String::as_str),
                 Some(epoch),
