@@ -468,6 +468,10 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             )
             .context("Delete task existence check")?;
         if exists {
+            t.execute("DELETE FROM tc_tags WHERE task_id = ?", [&uuid_str])
+                .context("Delete task tags")?;
+            t.execute("DELETE FROM tc_annotations WHERE task_id = ?", [&uuid_str])
+                .context("Delete task annotations")?;
             t.execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid_str])
                 .context("Delete task query")?;
         }
