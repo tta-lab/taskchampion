@@ -157,25 +157,23 @@ impl<'t> PowerSyncTxn<'t> {
             return Ok(id);
         }
 
+        // INSTEAD OF triggers on PowerSync views report 0 rows changed,
+        // so we can't rely on t.changes() to detect INSERT OR IGNORE behavior.
         let new_id = Uuid::new_v4().to_string();
         t.execute(
             "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
             params![&new_id, name, &self.user_id.to_string()],
         )?;
 
-        // If INSERT was ignored (PK collision, astronomically unlikely with UUIDs),
-        // re-query to get the authoritative ID rather than returning a dangling ref.
-        if t.changes() == 0 {
-            t.query_row(
-                "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
-                [name],
-                |r| r.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| Error::Database(format!("Failed to resolve project id for {name:?}")))
-        } else {
-            Ok(new_id)
-        }
+        // Re-query to get the authoritative ID — either the one we just inserted
+        // or the existing one if INSERT was ignored.
+        t.query_row(
+            "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
+            [name],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| Error::Database(format!("Failed to resolve project id for {name:?}")))
     }
 }
 
@@ -326,10 +324,21 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
     async fn delete_task(&mut self, uuid: Uuid) -> Result<bool> {
         let t = self.get_txn()?;
-        let changed = t
-            .execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid.to_string()])
-            .context("Delete task query")?;
-        Ok(changed > 0)
+        let uuid_str = uuid.to_string();
+        // INSTEAD OF triggers on PowerSync views report 0 rows changed,
+        // so check existence before DELETE to return the correct boolean.
+        let exists: bool = t
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tc_tasks WHERE id = ?)",
+                [&uuid_str],
+                |row| row.get(0),
+            )
+            .context("Delete task existence check")?;
+        if exists {
+            t.execute("DELETE FROM tc_tasks WHERE id = ?", [&uuid_str])
+                .context("Delete task query")?;
+        }
+        Ok(exists)
     }
 
     async fn all_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
