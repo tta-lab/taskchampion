@@ -8,7 +8,7 @@ use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::ffi::c_int;
 use std::path::Path;
-use std::sync::Once;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 // The PowerSync C extension is statically linked via powersync_sqlite_nostd.
@@ -18,18 +18,15 @@ unsafe extern "C" {
     fn powersync_init_static() -> c_int;
 }
 
-static POWERSYNC_EXTENSION: Once = Once::new();
+static POWERSYNC_RC: OnceLock<c_int> = OnceLock::new();
 
 /// Register the PowerSync SQLite auto-extension exactly once per process.
-/// Returns Err if the extension registration fails.
+/// Returns Err if the extension registration fails (on every call, not just the first).
 fn init_powersync_extension() -> Result<()> {
-    let mut rc = 0i32;
-    POWERSYNC_EXTENSION.call_once(|| {
-        // SAFETY: powersync_init_static calls sqlite3_auto_extension, which is
-        // safe to call from a single thread (Once guarantees single execution).
-        rc = unsafe { powersync_init_static() };
-    });
-    if rc != 0 {
+    // SAFETY: powersync_init_static calls sqlite3_auto_extension.
+    // OnceLock guarantees the closure runs exactly once, so there is no concurrent call.
+    let rc = POWERSYNC_RC.get_or_init(|| unsafe { powersync_init_static() });
+    if *rc != 0 {
         return Err(Error::Database(format!(
             "Failed to load PowerSync extension (rc={rc})"
         )));
