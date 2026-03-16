@@ -150,6 +150,19 @@ const TASK_SELECT_COLS: &str = "t.id, t.data, t.status, t.description, t.priorit
     t.entry_at, t.modified_at, t.due_at, t.scheduled_at, \
     t.start_at, t.end_at, t.wait_at, t.parent_id, p.name as project_name";
 
+/// Execute a task SELECT query and convert each row to `(Uuid, TaskMap)`.
+fn query_task_rows(
+    t: &rusqlite::Transaction<'_>,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<(Uuid, TaskMap)>> {
+    let mut q = t.prepare(sql)?;
+    let rows: Vec<RawTaskRow> = q
+        .query_map(params, read_raw_task_row)?
+        .collect::<std::result::Result<_, _>>()?;
+    rows.into_iter().map(raw_to_task).collect()
+}
+
 pub(super) struct PowerSyncStorageInner {
     conn: Connection,
     user_id: Uuid,
@@ -276,46 +289,71 @@ impl<'t> PowerSyncTxn<'t> {
             .as_ref()
             .ok_or_else(|| Error::Database("Transaction already committed".into()))
     }
+
+    /// Look up an existing project by name, or insert a new one and return its ID.
+    fn resolve_project_id(&self, name: &str) -> Result<String> {
+        let t = self.get_txn()?;
+        if let Some(id) = t
+            .query_row(
+                "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
+                [name],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+
+        let new_id = Uuid::new_v4().to_string();
+        t.execute(
+            "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
+            params![&new_id, name, &self.user_id.to_string()],
+        )?;
+
+        // If INSERT was ignored (PK collision, astronomically unlikely with UUIDs),
+        // re-query to get the authoritative ID rather than returning a dangling ref.
+        if t.changes() == 0 {
+            t.query_row(
+                "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
+                [name],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| Error::Database(format!("Failed to resolve project id for {name:?}")))
+        } else {
+            Ok(new_id)
+        }
+    }
 }
 
 #[async_trait(?Send)]
 impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn get_task(&mut self, uuid: Uuid) -> Result<Option<TaskMap>> {
-        let raw_opt: Option<RawTaskRow> = {
-            let t = self.get_txn()?;
-            let sql = format!(
-                "SELECT {TASK_SELECT_COLS}
-                 FROM tc_tasks t
-                 LEFT JOIN projects p ON t.project_id = p.id
-                 WHERE t.id = ? LIMIT 1"
-            );
-            t.query_row(&sql, [&uuid.to_string()], read_raw_task_row)
-                .optional()?
-        };
-        match raw_opt {
-            None => Ok(None),
-            Some(raw) => {
-                let (_, task_map) = raw_to_task(raw)?;
-                Ok(Some(task_map))
-            }
-        }
+        let t = self.get_txn()?;
+        let sql = format!(
+            "SELECT {TASK_SELECT_COLS}
+             FROM tc_tasks t
+             LEFT JOIN projects p ON t.project_id = p.id
+             WHERE t.id = ? LIMIT 1"
+        );
+        let raw_opt = t
+            .query_row(&sql, [&uuid.to_string()], read_raw_task_row)
+            .optional()?;
+        raw_opt
+            .map(|raw| raw_to_task(raw).map(|(_, task_map)| task_map))
+            .transpose()
     }
 
     async fn get_pending_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
-        let rows: Vec<RawTaskRow> = {
-            let t = self.get_txn()?;
-            let sql = format!(
-                "SELECT {TASK_SELECT_COLS}
-                 FROM tc_working_set ws
-                 INNER JOIN tc_tasks t ON ws.uuid = t.id
-                 LEFT JOIN projects p ON t.project_id = p.id
-                 WHERE ws.uuid IS NOT NULL"
-            );
-            let mut q = t.prepare(&sql)?;
-            let rows = q.query_map([], read_raw_task_row)?;
-            rows.collect::<std::result::Result<_, _>>()?
-        };
-        rows.into_iter().map(raw_to_task).collect()
+        let t = self.get_txn()?;
+        let sql = format!(
+            "SELECT {TASK_SELECT_COLS}
+             FROM tc_working_set ws
+             INNER JOIN tc_tasks t ON ws.uuid = t.id
+             LEFT JOIN projects p ON t.project_id = p.id
+             WHERE ws.uuid IS NOT NULL"
+        );
+        query_task_rows(t, &sql, [])
     }
 
     async fn create_task(&mut self, uuid: Uuid) -> Result<bool> {
@@ -338,7 +376,6 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
     async fn set_task(&mut self, uuid: Uuid, task: TaskMap) -> Result<()> {
         let mut task_data = task;
-        let user_id_str = self.user_id.to_string();
 
         // Extract string columns.
         let status = task_data.remove("status");
@@ -357,42 +394,10 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let wait_at = extract_timestamp(&mut task_data, "wait")?;
 
         // Resolve project name → project_id (look up or create in projects table).
-        let project_name = task_data.remove("project");
-        let project_id: Option<String> = if let Some(ref name) = project_name {
-            let existing: Option<String> = {
-                let t = self.get_txn()?;
-                t.query_row(
-                    "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
-                    [name],
-                    |r| r.get(0),
-                )
-                .optional()?
-            };
-            if existing.is_some() {
-                existing
-            } else {
-                let new_id = Uuid::new_v4().to_string();
-                let t = self.get_txn()?;
-                t.execute(
-                    "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
-                    params![&new_id, name, &user_id_str],
-                )?;
-                // If INSERT was ignored (PK collision, astronomically unlikely with UUIDs),
-                // re-query to get the authoritative ID rather than returning a dangling ref.
-                if t.changes() == 0 {
-                    t.query_row(
-                        "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
-                        [name],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                } else {
-                    Some(new_id)
-                }
-            }
-        } else {
-            None
-        };
+        let project_id: Option<String> = task_data
+            .remove("project")
+            .map(|name| self.resolve_project_id(&name))
+            .transpose()?;
 
         let data_str = serde_json::to_string(&task_data)
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
@@ -424,7 +429,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                project_id = excluded.project_id",
             params![
                 &uuid.to_string(),
-                &user_id_str,
+                &self.user_id.to_string(),
                 &data_str,
                 &status,
                 &description,
@@ -453,33 +458,23 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn all_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
-        let rows: Vec<RawTaskRow> = {
-            let t = self.get_txn()?;
-            let sql = format!(
-                "SELECT {TASK_SELECT_COLS}
-                 FROM tc_tasks t
-                 LEFT JOIN projects p ON t.project_id = p.id"
-            );
-            let mut q = t.prepare(&sql)?;
-            let rows = q.query_map([], read_raw_task_row)?;
-            rows.collect::<std::result::Result<_, _>>()?
-        };
-        rows.into_iter().map(raw_to_task).collect()
+        let t = self.get_txn()?;
+        let sql = format!(
+            "SELECT {TASK_SELECT_COLS}
+             FROM tc_tasks t
+             LEFT JOIN projects p ON t.project_id = p.id"
+        );
+        query_task_rows(t, &sql, [])
     }
 
     async fn all_task_uuids(&mut self) -> Result<Vec<Uuid>> {
         let t = self.get_txn()?;
         let mut q = t.prepare("SELECT id FROM tc_tasks")?;
         let rows = q.query_map([], |r| r.get::<_, String>(0))?;
-        let raw: Vec<std::result::Result<String, _>> = rows.collect();
-        let mut ret = vec![];
-        for r in raw {
-            let s = r?;
-            let uuid =
-                Uuid::parse_str(&s).map_err(|e| Error::Database(format!("Invalid UUID: {e}")))?;
-            ret.push(uuid);
-        }
-        Ok(ret)
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|s| Uuid::parse_str(&s).map_err(|e| Error::Database(format!("Invalid UUID: {e}"))))
+            .collect()
     }
 
     async fn base_version(&mut self) -> Result<VersionId> {
@@ -493,22 +488,21 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn get_task_operations(&mut self, uuid: Uuid) -> Result<Vec<Operation>> {
         // tc_operations has no UUID column (schema is PowerSync-managed).
         // Filter in memory after deserializing; acceptable for the expected operation count.
-        let raw: Vec<String> = {
-            let t = self.get_txn()?;
-            let mut q = t.prepare("SELECT data FROM tc_operations ORDER BY id ASC")?;
-            let rows = q.query_map([], |r| r.get::<_, String>("data"))?;
-            rows.collect::<std::result::Result<_, _>>()?
-        };
-
-        let mut ret = vec![];
-        for data_str in raw {
-            let op: Operation = serde_json::from_str(&data_str)
-                .map_err(|e| Error::Database(format!("Failed to parse operation: {e}")))?;
-            if op.get_uuid() == Some(uuid) {
-                ret.push(op);
-            }
-        }
-        Ok(ret)
+        let t = self.get_txn()?;
+        let mut q = t.prepare("SELECT data FROM tc_operations ORDER BY id ASC")?;
+        let rows = q.query_map([], |r| r.get::<_, String>("data"))?;
+        let raw: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
+        raw.into_iter()
+            .map(|data_str| {
+                serde_json::from_str::<Operation>(&data_str)
+                    .map_err(|e| Error::Database(format!("Failed to parse operation: {e}")))
+            })
+            .filter_map(|res| match res {
+                Ok(op) if op.get_uuid() == Some(uuid) => Some(Ok(op)),
+                Ok(_) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect()
     }
 
     // PowerSync handles sync externally via flicknote-sync; these methods are no-ops.
@@ -534,15 +528,14 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn remove_operation(&mut self, op: Operation) -> Result<()> {
-        let last: Option<(i64, String)> = {
-            let t = self.get_txn()?;
-            t.query_row(
+        let t = self.get_txn()?;
+        let last: Option<(i64, String)> = t
+            .query_row(
                 "SELECT id, data FROM tc_operations ORDER BY id DESC LIMIT 1",
                 [],
                 |x| Ok((x.get(0)?, x.get(1)?)),
             )
-            .optional()?
-        };
+            .optional()?;
 
         let Some((last_id, last_data)) = last else {
             return Err(Error::Database("No operations to remove".into()));
