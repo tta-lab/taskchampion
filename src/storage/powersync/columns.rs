@@ -144,7 +144,10 @@ mod tests {
         let result = epoch_to_iso("1724612771");
         assert!(result.is_some());
         let iso = result.unwrap();
-        assert!(iso.starts_with("2024-08-25"), "expected 2024-08-25 date, got {iso}");
+        assert!(
+            iso.starts_with("2024-08-25"),
+            "expected 2024-08-25 date, got {iso}"
+        );
     }
 
     #[test]
@@ -182,7 +185,10 @@ mod tests {
         map.insert("entry".into(), "1724612771".into());
         let result = extract_timestamp(&mut map, "entry").unwrap();
         assert!(result.is_some());
-        assert!(!map.contains_key("entry"), "key should be removed after extraction");
+        assert!(
+            !map.contains_key("entry"),
+            "key should be removed after extraction"
+        );
     }
 
     #[test]
@@ -239,9 +245,15 @@ mod tests {
         raw.project_name = Some("work".into());
         let (_, task_map) = raw_to_task(raw).unwrap();
         assert_eq!(task_map.get("status").map(String::as_str), Some("pending"));
-        assert_eq!(task_map.get("description").map(String::as_str), Some("my task"));
+        assert_eq!(
+            task_map.get("description").map(String::as_str),
+            Some("my task")
+        );
         assert_eq!(task_map.get("priority").map(String::as_str), Some("H"));
-        assert_eq!(task_map.get("parent").map(String::as_str), Some("parent-uuid"));
+        assert_eq!(
+            task_map.get("parent").map(String::as_str),
+            Some("parent-uuid")
+        );
         assert_eq!(task_map.get("project").map(String::as_str), Some("work"));
     }
 
@@ -253,8 +265,14 @@ mod tests {
         raw.entry_at = Some(iso.clone());
         raw.modified_at = Some(iso.clone());
         let (_, task_map) = raw_to_task(raw).unwrap();
-        assert_eq!(task_map.get("entry").map(String::as_str), Some("1724612771"));
-        assert_eq!(task_map.get("modified").map(String::as_str), Some("1724612771"));
+        assert_eq!(
+            task_map.get("entry").map(String::as_str),
+            Some("1724612771")
+        );
+        assert_eq!(
+            task_map.get("modified").map(String::as_str),
+            Some("1724612771")
+        );
     }
 
     #[test]
