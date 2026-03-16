@@ -264,6 +264,35 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .map(|name| self.resolve_project_id(&name))
             .transpose()?;
 
+        // Extract tags (tag_<name> → "") before serializing data blob.
+        // Collect keys first to break the immutable borrow, then remove via mutable borrow.
+        let tag_names: Vec<String> = task_data
+            .keys()
+            .filter(|k| k.starts_with("tag_"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|k| {
+                task_data.remove(&k);
+                k.strip_prefix("tag_").map(String::from)
+            })
+            .collect();
+
+        // Extract annotations (annotation_<epoch> → description) before serializing data blob.
+        let annotations: Vec<(i64, String)> = task_data
+            .keys()
+            .filter(|k| k.starts_with("annotation_"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|k| {
+                let epoch_str = k.strip_prefix("annotation_")?;
+                let epoch: i64 = epoch_str.parse().ok()?;
+                let desc = task_data.remove(&k)?;
+                Some((epoch, desc))
+            })
+            .collect();
+
         let data_str = serde_json::to_string(&task_data)
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
 
@@ -333,6 +362,49 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             )
             .context("Set task INSERT query")?;
         }
+
+        // Sync tags: delete all existing rows for this task, then insert current set.
+        let user_id_str = self.user_id.to_string();
+        t.execute("DELETE FROM tc_tags WHERE task_id = ?", [&uuid_str])
+            .context("Delete existing tags")?;
+        for tag_name in &tag_names {
+            t.execute(
+                "INSERT INTO tc_tags (id, task_id, user_id, name) VALUES (?, ?, ?, ?)",
+                params![
+                    &Uuid::now_v7().to_string(),
+                    &uuid_str,
+                    &user_id_str,
+                    tag_name,
+                ],
+            )
+            .context("Insert tag")?;
+        }
+
+        // Sync annotations: delete all existing rows for this task, then insert current set.
+        t.execute(
+            "DELETE FROM tc_annotations WHERE task_id = ?",
+            [&uuid_str],
+        )
+        .context("Delete existing annotations")?;
+        for (epoch, description) in &annotations {
+            let entry_at = DateTime::from_timestamp(*epoch, 0)
+                .map(|dt| dt.to_rfc3339())
+                .ok_or_else(|| {
+                    Error::Database(format!("Invalid annotation timestamp: {epoch}"))
+                })?;
+            t.execute(
+                "INSERT INTO tc_annotations (id, task_id, user_id, entry_at, description) VALUES (?, ?, ?, ?, ?)",
+                params![
+                    &Uuid::now_v7().to_string(),
+                    &uuid_str,
+                    &user_id_str,
+                    &entry_at,
+                    description,
+                ],
+            )
+            .context("Insert annotation")?;
+        }
+
         Ok(())
     }
 
