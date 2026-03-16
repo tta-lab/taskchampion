@@ -16,6 +16,44 @@ use super::extension::init_powersync_extension;
 
 const TS_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
+/// Query tc_tags and tc_annotations for the given task UUID and inject them
+/// into the TaskMap as `tag_<name>` and `annotation_<epoch>` keys.
+fn merge_tags_annotations(
+    t: &rusqlite::Transaction<'_>,
+    task_id: &str,
+    task_map: &mut TaskMap,
+) -> Result<()> {
+    let mut tag_stmt = t
+        .prepare("SELECT name FROM tc_tags WHERE task_id = ?")
+        .context("Prepare tag query")?;
+    let tag_rows = tag_stmt
+        .query_map([task_id], |row| row.get::<_, String>(0))
+        .context("Query tags")?;
+    for name in tag_rows {
+        let name = name?;
+        task_map.insert(format!("tag_{name}"), String::new());
+    }
+
+    let mut ann_stmt = t
+        .prepare("SELECT entry_at, description FROM tc_annotations WHERE task_id = ?")
+        .context("Prepare annotation query")?;
+    let ann_rows = ann_stmt
+        .query_map([task_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("Query annotations")?;
+    for row in ann_rows {
+        let (entry_at_iso, description) = row?;
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&entry_at_iso) {
+            let epoch = dt.timestamp();
+            task_map.insert(format!("annotation_{epoch}"), description);
+        }
+        // Invalid ISO timestamps are silently skipped
+    }
+
+    Ok(())
+}
+
 pub(super) struct PowerSyncStorageInner {
     pub(super) conn: Connection,
     user_id: Uuid,
@@ -204,9 +242,14 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let raw_opt = t
             .query_row(&sql, [&uuid.to_string()], read_raw_task_row)
             .optional()?;
-        raw_opt
-            .map(|raw| raw_to_task(raw).map(|(_, task_map)| task_map))
-            .transpose()
+        match raw_opt {
+            None => Ok(None),
+            Some(raw) => {
+                let (_, mut task_map) = raw_to_task(raw)?;
+                merge_tags_annotations(t, &uuid.to_string(), &mut task_map)?;
+                Ok(Some(task_map))
+            }
+        }
     }
 
     async fn get_pending_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
@@ -218,7 +261,11 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
              LEFT JOIN projects p ON t.project_id = p.id
              WHERE ws.uuid IS NOT NULL"
         );
-        query_task_rows(t, &sql, [])
+        let mut tasks = query_task_rows(t, &sql, [])?;
+        for (uuid, task_map) in &mut tasks {
+            merge_tags_annotations(t, &uuid.to_string(), task_map)?;
+        }
+        Ok(tasks)
     }
 
     async fn create_task(&mut self, uuid: Uuid) -> Result<bool> {
@@ -434,7 +481,11 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
              FROM tc_tasks t
              LEFT JOIN projects p ON t.project_id = p.id"
         );
-        query_task_rows(t, &sql, [])
+        let mut tasks = query_task_rows(t, &sql, [])?;
+        for (uuid, task_map) in &mut tasks {
+            merge_tags_annotations(t, &uuid.to_string(), task_map)?;
+        }
+        Ok(tasks)
     }
 
     async fn all_task_uuids(&mut self) -> Result<Vec<Uuid>> {
