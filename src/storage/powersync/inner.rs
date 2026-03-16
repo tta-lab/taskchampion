@@ -282,32 +282,46 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             )
             .context("Set task UPDATE query")?;
 
-        if updated == 0 {
-            t.execute(
-                "INSERT INTO tc_tasks
-                 (id, user_id, data, status, description, priority,
-                  entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
-                  parent_id, project_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    &uuid.to_string(),
-                    &self.user_id.to_string(),
-                    &data_str,
-                    &status,
-                    &description,
-                    &priority,
-                    &entry_at,
-                    &modified_at,
-                    &due_at,
-                    &scheduled_at,
-                    &start_at,
-                    &end_at,
-                    &wait_at,
-                    &parent_id,
-                    &project_id,
-                ],
-            )
-            .context("Set task INSERT query")?;
+        match updated {
+            1 => {}
+            0 => {
+                let inserted = t
+                    .execute(
+                        "INSERT INTO tc_tasks
+                         (id, user_id, data, status, description, priority,
+                          entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
+                          parent_id, project_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        params![
+                            &uuid.to_string(),
+                            &self.user_id.to_string(),
+                            &data_str,
+                            &status,
+                            &description,
+                            &priority,
+                            &entry_at,
+                            &modified_at,
+                            &due_at,
+                            &scheduled_at,
+                            &start_at,
+                            &end_at,
+                            &wait_at,
+                            &parent_id,
+                            &project_id,
+                        ],
+                    )
+                    .context("Set task INSERT query")?;
+                if inserted != 1 {
+                    return Err(Error::Database(format!(
+                        "Set task INSERT wrote {inserted} rows for uuid={uuid}; expected 1"
+                    )));
+                }
+            }
+            n => {
+                return Err(Error::Database(format!(
+                    "Set task UPDATE affected {n} rows for uuid={uuid}; expected 0 or 1"
+                )));
+            }
         }
         Ok(())
     }
