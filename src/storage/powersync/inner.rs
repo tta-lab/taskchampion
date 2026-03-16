@@ -5,6 +5,7 @@ use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::DateTime;
+use powersync_core::powersync_init_static;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 use uuid::Uuid;
@@ -133,9 +134,63 @@ pub(super) struct PowerSyncStorageInner {
 impl PowerSyncStorageInner {
     /// Open an existing PowerSync-managed database file and create local-only tables.
     pub(super) fn new(db_path: &Path, user_id: Uuid) -> Result<Self> {
+        // Register the PowerSync extension as a SQLite auto-extension.
+        // Safe to call multiple times — subsequent calls are no-ops.
+        let rc = powersync_init_static();
+        if rc != 0 {
+            return Err(Error::Database(format!(
+                "Failed to load PowerSync extension (rc={rc})"
+            )));
+        }
+
+        // Open the connection. The auto-extension fires on open, registering all
+        // PowerSync functions (powersync_strip_subtype, etc.).
         let conn = Connection::open(db_path)?;
+
+        // Verify the DB has been initialized by flicknote-sync (tc_tasks view must exist).
+        let has_tc_tasks: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='view' AND name='tc_tasks'",
+                [],
+                |r| r.get(0),
+            )
+            .context("Checking for tc_tasks view")?;
+        if !has_tc_tasks {
+            return Err(Error::Database(
+                "tc_tasks view not found — the database must be initialized by flicknote-sync \
+                 before flicktask can use it. Run flicknote-sync first to set up PowerSync views."
+                    .into(),
+            ));
+        }
+
+        // Belt-and-suspenders: ensure WAL mode and busy_timeout for multi-process safety.
+        // flicknote-sync already sets WAL (persists in DB header), but set it explicitly
+        // in case it was somehow reset. busy_timeout is per-connection — must always be set.
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .context("Setting WAL mode")?;
+        conn.pragma_update(None, "busy_timeout", 30_000)
+            .context("Setting busy timeout")?;
+
+        // Initialize PowerSync internal tables (ps_migration, ps_oplog, etc.).
+        // This does NOT create user-facing views — those already exist from flicknote-sync.
+        // We intentionally do NOT call powersync_replace_schema here because it performs
+        // a FULL REPLACE — it would drop views for notes, projects, note_extractions
+        // that flicknote-sync registered. We only need the extension functions loaded
+        // (which happened at Connection::open via auto-extension).
+        conn.prepare("SELECT powersync_init()")?
+            .query_row([], |_| Ok(()))
+            .context("PowerSync init")?;
+
+        // Create local-only tables that PowerSync doesn't manage.
         conn.execute_batch(
             "
+            CREATE TABLE IF NOT EXISTS tc_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                data TEXT NOT NULL,
+                synced BOOLEAN NOT NULL DEFAULT false,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS tc_working_set (
                 id INTEGER PRIMARY KEY,
                 uuid TEXT
@@ -144,13 +199,10 @@ impl PowerSyncStorageInner {
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
-            CREATE TABLE IF NOT EXISTS tc_operations_sync (
-                operation_id INTEGER PRIMARY KEY,
-                synced BOOLEAN NOT NULL DEFAULT false
-            );
         ",
         )
-        .context("Creating local-only PowerSync tables")?;
+        .context("Creating local-only tables")?;
+
         Ok(Self { conn, user_id })
     }
 
@@ -181,6 +233,7 @@ impl PowerSyncStorageInner {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
                 data TEXT NOT NULL,
+                synced BOOLEAN NOT NULL DEFAULT false,
                 created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS tc_working_set (
@@ -190,10 +243,6 @@ impl PowerSyncStorageInner {
             CREATE TABLE IF NOT EXISTS tc_sync_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
-            );
-            CREATE TABLE IF NOT EXISTS tc_operations_sync (
-                operation_id INTEGER PRIMARY KEY,
-                synced BOOLEAN NOT NULL DEFAULT false
             );
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -507,12 +556,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn unsynced_operations(&mut self) -> Result<Vec<Operation>> {
         let raw: Vec<String> = {
             let t = self.get_txn()?;
-            let mut q = t.prepare(
-                "SELECT o.data FROM tc_operations o
-                 INNER JOIN tc_operations_sync s ON o.id = s.operation_id
-                 WHERE s.synced = false
-                 ORDER BY o.id ASC",
-            )?;
+            let mut q =
+                t.prepare("SELECT data FROM tc_operations WHERE synced = false ORDER BY id ASC")?;
             let rows = q.query_map([], |r| r.get::<_, String>("data"))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
@@ -529,7 +574,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn num_unsynced_operations(&mut self) -> Result<usize> {
         let t = self.get_txn()?;
         let count: usize = t.query_row(
-            "SELECT COUNT(*) FROM tc_operations_sync WHERE synced = false",
+            "SELECT COUNT(*) FROM tc_operations WHERE synced = false",
             [],
             |x| x.get(0),
         )?;
@@ -539,21 +584,12 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn add_operation(&mut self, op: Operation) -> Result<()> {
         let data_str = serde_json::to_string(&op)
             .map_err(|e| Error::Database(format!("Failed to serialize operation: {e}")))?;
-
         let t = self.get_txn()?;
         t.execute(
             "INSERT INTO tc_operations (user_id, data) VALUES (?, ?)",
             params![&self.user_id.to_string(), &data_str],
         )
         .context("Add operation query")?;
-
-        let op_id = t.last_insert_rowid();
-        t.execute(
-            "INSERT INTO tc_operations_sync (operation_id, synced) VALUES (?, false)",
-            [op_id],
-        )
-        .context("Add operation sync tracking")?;
-
         Ok(())
     }
 
@@ -561,10 +597,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let last: Option<(i64, String)> = {
             let t = self.get_txn()?;
             t.query_row(
-                "SELECT o.id, o.data FROM tc_operations o
-                 INNER JOIN tc_operations_sync s ON o.id = s.operation_id
-                 WHERE s.synced = false
-                 ORDER BY o.id DESC LIMIT 1",
+                "SELECT id, data FROM tc_operations WHERE synced = false ORDER BY id DESC LIMIT 1",
                 [],
                 |x| Ok((x.get(0)?, x.get(1)?)),
             )
@@ -572,9 +605,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         };
 
         let Some((last_id, last_data)) = last else {
-            return Err(Error::Database(
-                "No unsynced operations to remove".into(),
-            ));
+            return Err(Error::Database("No unsynced operations to remove".into()));
         };
 
         let last_op: Operation = serde_json::from_str(&last_data)
@@ -582,34 +613,26 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
         if last_op != op {
             return Err(Error::Database(format!(
-                "Last unsynced operation does not match -- cannot remove \
+                "Last operation does not match -- cannot remove \
                  (expected {op:?}, got {last_op:?})"
             )));
         }
 
         let t = self.get_txn()?;
-        t.execute(
-            "DELETE FROM tc_operations_sync WHERE operation_id = ?",
-            [last_id],
-        )
-        .context("Remove operation sync tracking")?;
-        t.execute(
-            "DELETE FROM tc_operations WHERE id = ?",
-            [last_id],
-        )
-        .context("Remove operation")?;
+        t.execute("DELETE FROM tc_operations WHERE id = ?", [last_id])
+            .context("Remove operation")?;
 
         Ok(())
     }
 
-    /// Mark all locally-tracked operations as synced and delete operations for tasks
-    /// that no longer exist. Changes are not persisted until `commit()` is called.
+    /// Mark all unsynced operations as synced and delete operations for tasks that no longer exist.
+    /// Changes are not persisted until `commit()` is called.
     async fn sync_complete(&mut self) -> Result<()> {
         let t = self.get_txn()?;
 
         // Mark all locally-tracked operations as synced.
         t.execute(
-            "UPDATE tc_operations_sync SET synced = true WHERE synced = false",
+            "UPDATE tc_operations SET synced = true WHERE synced = false",
             [],
         )
         .context("Marking operations as synced")?;
@@ -634,13 +657,6 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             [],
         )
         .context("Deleting orphaned operations")?;
-
-        // Clean up sync tracking rows for deleted operations.
-        t.execute(
-            "DELETE FROM tc_operations_sync WHERE operation_id NOT IN (SELECT id FROM tc_operations)",
-            [],
-        )
-        .context("Cleaning up orphaned sync tracking")?;
 
         Ok(())
     }
