@@ -339,7 +339,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let annotations: Vec<(i64, String)> = annotation_keys
             .into_iter()
             .map(|k| {
-                let desc = task_data.remove(&k).unwrap_or_default();
+                let desc = task_data.remove(&k).expect("key collected from same map");
                 let epoch_str = k.strip_prefix("annotation_").unwrap();
                 let epoch: i64 = epoch_str.parse().map_err(|_| {
                     Error::Database(format!(
