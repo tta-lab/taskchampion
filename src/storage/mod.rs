@@ -19,6 +19,8 @@ mod config;
 #[cfg(all(target_arch = "wasm32", feature = "storage-indexeddb"))]
 pub mod indexeddb;
 pub mod inmemory;
+#[cfg(feature = "storage-powersync")]
+pub mod powersync;
 #[cfg(feature = "storage-sqlite")]
 pub mod sqlite;
 #[cfg(test)]
@@ -28,6 +30,7 @@ pub use config::AccessMode;
 
 #[cfg(any(
     feature = "storage-sqlite",
+    feature = "storage-powersync",
     all(target_arch = "wasm32", feature = "storage-indexeddb")
 ))]
 mod send_wrapper;
