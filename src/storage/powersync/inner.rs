@@ -22,6 +22,20 @@ fn iso_to_epoch(iso_str: &str) -> Option<String> {
     Some(dt.timestamp().to_string())
 }
 
+/// Remove a timestamp field from `task_data`, converting epoch → ISO 8601.
+/// Returns `Err` if the value is present but not a valid epoch integer.
+fn extract_timestamp(task_data: &mut TaskMap, key: &str) -> Result<Option<String>> {
+    match task_data.remove(key) {
+        None => Ok(None),
+        Some(epoch_str) => match epoch_to_iso(&epoch_str) {
+            Some(iso) => Ok(Some(iso)),
+            None => Err(Error::Database(format!(
+                "Invalid epoch timestamp for field {key:?}: {epoch_str:?}"
+            ))),
+        },
+    }
+}
+
 /// Raw row fetched from tc_tasks JOIN projects.
 struct RawTaskRow {
     id: String,
@@ -83,6 +97,7 @@ fn raw_to_task(raw: RawTaskRow) -> Result<(Uuid, TaskMap)> {
     }
 
     // Inject timestamp columns (ISO 8601 → epoch string).
+    // An ISO value present in the DB but failing to parse is a data integrity error.
     for (col_val, taskmap_key) in [
         (raw.entry_at, "entry"),
         (raw.modified_at, "modified"),
@@ -93,24 +108,22 @@ fn raw_to_task(raw: RawTaskRow) -> Result<(Uuid, TaskMap)> {
         (raw.wait_at, "wait"),
     ] {
         if let Some(iso) = col_val {
-            if let Some(epoch) = iso_to_epoch(&iso) {
-                task_map.insert(taskmap_key.into(), epoch);
-            }
+            let epoch = iso_to_epoch(&iso).ok_or_else(|| {
+                Error::Database(format!(
+                    "Malformed ISO timestamp in column {taskmap_key}_at: {iso:?}"
+                ))
+            })?;
+            task_map.insert(taskmap_key.into(), epoch);
         }
     }
 
     Ok((uuid, task_map))
 }
 
-/// SQL to select all task columns with project name resolved via LEFT JOIN.
-const SELECT_TASK_SQL: &str = "
-    SELECT t.id, t.data, t.status, t.description, t.priority,
-           t.entry_at, t.modified_at, t.due_at, t.scheduled_at,
-           t.start_at, t.end_at, t.wait_at, t.parent_id,
-           p.name as project_name
-    FROM tc_tasks t
-    LEFT JOIN projects p ON t.project_id = p.id
-";
+/// Shared column projection for all tc_tasks queries (requires `t` and `p` aliases).
+const TASK_SELECT_COLS: &str = "t.id, t.data, t.status, t.description, t.priority, \
+    t.entry_at, t.modified_at, t.due_at, t.scheduled_at, \
+    t.start_at, t.end_at, t.wait_at, t.parent_id, p.name as project_name";
 
 pub(super) struct PowerSyncStorageInner {
     conn: Connection,
@@ -242,7 +255,12 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn get_task(&mut self, uuid: Uuid) -> Result<Option<TaskMap>> {
         let raw_opt: Option<RawTaskRow> = {
             let t = self.get_txn()?;
-            let sql = format!("{SELECT_TASK_SQL} WHERE t.id = ? LIMIT 1");
+            let sql = format!(
+                "SELECT {TASK_SELECT_COLS}
+                 FROM tc_tasks t
+                 LEFT JOIN projects p ON t.project_id = p.id
+                 WHERE t.id = ? LIMIT 1"
+            );
             t.query_row(&sql, [&uuid.to_string()], read_raw_task_row)
                 .optional()?
         };
@@ -259,10 +277,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let rows: Vec<RawTaskRow> = {
             let t = self.get_txn()?;
             let sql = format!(
-                "SELECT t.id, t.data, t.status, t.description, t.priority,
-                        t.entry_at, t.modified_at, t.due_at, t.scheduled_at,
-                        t.start_at, t.end_at, t.wait_at, t.parent_id,
-                        p.name as project_name
+                "SELECT {TASK_SELECT_COLS}
                  FROM tc_working_set ws
                  INNER JOIN tc_tasks t ON ws.uuid = t.id
                  LEFT JOIN projects p ON t.project_id = p.id
@@ -303,17 +318,15 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let priority = task_data.remove("priority");
         let parent_id = task_data.remove("parent");
 
-        // Extract and convert timestamp columns.
-        let entry_at = task_data.remove("entry").as_deref().and_then(epoch_to_iso);
-        let modified_at = task_data.remove("modified").as_deref().and_then(epoch_to_iso);
-        let due_at = task_data.remove("due").as_deref().and_then(epoch_to_iso);
-        let scheduled_at = task_data
-            .remove("scheduled")
-            .as_deref()
-            .and_then(epoch_to_iso);
-        let start_at = task_data.remove("start").as_deref().and_then(epoch_to_iso);
-        let end_at = task_data.remove("end").as_deref().and_then(epoch_to_iso);
-        let wait_at = task_data.remove("wait").as_deref().and_then(epoch_to_iso);
+        // Extract and convert timestamp columns. Error if a value is present but invalid,
+        // before it has been removed from task_data, so no data is silently dropped.
+        let entry_at = extract_timestamp(&mut task_data, "entry")?;
+        let modified_at = extract_timestamp(&mut task_data, "modified")?;
+        let due_at = extract_timestamp(&mut task_data, "due")?;
+        let scheduled_at = extract_timestamp(&mut task_data, "scheduled")?;
+        let start_at = extract_timestamp(&mut task_data, "start")?;
+        let end_at = extract_timestamp(&mut task_data, "end")?;
+        let wait_at = extract_timestamp(&mut task_data, "wait")?;
 
         // Resolve project name → project_id (look up or create in projects table).
         let project_name = task_data.remove("project");
@@ -331,14 +344,23 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                 existing
             } else {
                 let new_id = Uuid::new_v4().to_string();
-                {
-                    let t = self.get_txn()?;
-                    t.execute(
-                        "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
-                        params![&new_id, name, &user_id_str],
-                    )?;
+                let t = self.get_txn()?;
+                t.execute(
+                    "INSERT OR IGNORE INTO projects (id, name, user_id) VALUES (?, ?, ?)",
+                    params![&new_id, name, &user_id_str],
+                )?;
+                // If INSERT was ignored (PK collision, astronomically unlikely with UUIDs),
+                // re-query to get the authoritative ID rather than returning a dangling ref.
+                if t.changes() == 0 {
+                    t.query_row(
+                        "SELECT id FROM projects WHERE name = ? ORDER BY created_at LIMIT 1",
+                        [name],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                } else {
+                    Some(new_id)
                 }
-                Some(new_id)
             }
         } else {
             None
@@ -347,13 +369,31 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let data_str = serde_json::to_string(&task_data)
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
 
+        // Use upsert (INSERT ... ON CONFLICT DO UPDATE) rather than INSERT OR REPLACE.
+        // INSERT OR REPLACE performs a DELETE + INSERT, which resets any columns not in
+        // the INSERT list and may interfere with PowerSync's change-tracking triggers.
         let t = self.get_txn()?;
         t.execute(
-            "INSERT OR REPLACE INTO tc_tasks
+            "INSERT INTO tc_tasks
              (id, user_id, data, status, description, priority,
               entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
               parent_id, project_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               user_id = excluded.user_id,
+               data = excluded.data,
+               status = excluded.status,
+               description = excluded.description,
+               priority = excluded.priority,
+               entry_at = excluded.entry_at,
+               modified_at = excluded.modified_at,
+               due_at = excluded.due_at,
+               scheduled_at = excluded.scheduled_at,
+               start_at = excluded.start_at,
+               end_at = excluded.end_at,
+               wait_at = excluded.wait_at,
+               parent_id = excluded.parent_id,
+               project_id = excluded.project_id",
             params![
                 &uuid.to_string(),
                 &user_id_str,
@@ -390,7 +430,12 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     async fn all_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
         let rows: Vec<RawTaskRow> = {
             let t = self.get_txn()?;
-            let mut q = t.prepare(SELECT_TASK_SQL)?;
+            let sql = format!(
+                "SELECT {TASK_SELECT_COLS}
+                 FROM tc_tasks t
+                 LEFT JOIN projects p ON t.project_id = p.id"
+            );
+            let mut q = t.prepare(&sql)?;
             let rows = q.query_map([], read_raw_task_row)?;
             rows.collect::<std::result::Result<_, _>>()?
         };
@@ -439,7 +484,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn get_task_operations(&mut self, uuid: Uuid) -> Result<Vec<Operation>> {
-        // tc_operations has no UUID column; filter in memory by deserializing operations.
+        // tc_operations has no UUID column (schema is PowerSync-managed).
+        // Filter in memory after deserializing; acceptable for the expected operation count.
         let raw: Vec<String> = {
             let t = self.get_txn()?;
             let mut q = t.prepare("SELECT data FROM tc_operations ORDER BY id ASC")?;
@@ -527,7 +573,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
         let Some((last_id, last_data)) = last else {
             return Err(Error::Database(
-                "Last operation does not match -- cannot remove".into(),
+                "No unsynced operations to remove".into(),
             ));
         };
 
@@ -535,9 +581,10 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .map_err(|e| Error::Database(format!("Failed to parse operation: {e}")))?;
 
         if last_op != op {
-            return Err(Error::Database(
-                "Last operation does not match -- cannot remove".into(),
-            ));
+            return Err(Error::Database(format!(
+                "Last unsynced operation does not match -- cannot remove \
+                 (expected {op:?}, got {last_op:?})"
+            )));
         }
 
         let t = self.get_txn()?;
@@ -555,6 +602,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         Ok(())
     }
 
+    /// Mark all locally-tracked operations as synced and delete operations for tasks
+    /// that no longer exist. Changes are not persisted until `commit()` is called.
     async fn sync_complete(&mut self) -> Result<()> {
         let t = self.get_txn()?;
 
@@ -616,9 +665,13 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             let (id, uuid_str) = r?;
             let uuid = Uuid::parse_str(&uuid_str)
                 .map_err(|e| Error::Database(format!("Invalid UUID in working set: {e}")))?;
-            if id < res.len() {
-                res[id] = Some(uuid);
+            if id >= res.len() {
+                return Err(Error::Database(format!(
+                    "Working set id {id} is out of range ({} slots allocated)",
+                    res.len()
+                )));
             }
+            res[id] = Some(uuid);
         }
 
         Ok(res)
