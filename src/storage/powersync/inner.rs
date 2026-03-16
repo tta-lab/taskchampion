@@ -318,8 +318,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let priority = task_data.remove("priority");
         let parent_id = task_data.remove("parent");
 
-        // Extract and convert timestamp columns. Error if a value is present but invalid,
-        // before it has been removed from task_data, so no data is silently dropped.
+        // Extract and convert timestamp columns. An Err propagates immediately,
+        // aborting set_task before any DB write, so no partial state is committed.
         let entry_at = extract_timestamp(&mut task_data, "entry")?;
         let modified_at = extract_timestamp(&mut task_data, "modified")?;
         let due_at = extract_timestamp(&mut task_data, "due")?;
