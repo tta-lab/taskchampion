@@ -94,16 +94,16 @@ impl PowerSyncStorageInner {
                 project_id TEXT
             );
             CREATE TABLE IF NOT EXISTS tc_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 user_id TEXT,
                 data TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             );
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 user_id TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             );
         ",
         )
@@ -253,10 +253,20 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
 
         // PowerSync views don't support UPSERT (INSERT ... ON CONFLICT DO UPDATE).
-        // Use UPDATE-then-INSERT: try UPDATE first, INSERT if row doesn't exist.
+        // INSTEAD OF triggers also report 0 rows changed regardless of success,
+        // so we check existence with SELECT, then INSERT or UPDATE accordingly.
         let t = self.get_txn()?;
-        let updated = t
-            .execute(
+        let uuid_str = uuid.to_string();
+        let exists: bool = t
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tc_tasks WHERE id = ?)",
+                [&uuid_str],
+                |row| row.get(0),
+            )
+            .context("Set task existence check")?;
+
+        if exists {
+            t.execute(
                 "UPDATE tc_tasks SET
                    user_id = ?, data = ?, status = ?, description = ?, priority = ?,
                    entry_at = ?, modified_at = ?, due_at = ?, scheduled_at = ?,
@@ -277,51 +287,36 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                     &wait_at,
                     &parent_id,
                     &project_id,
-                    &uuid.to_string(),
+                    &uuid_str,
                 ],
             )
             .context("Set task UPDATE query")?;
-
-        match updated {
-            1 => {}
-            0 => {
-                let inserted = t
-                    .execute(
-                        "INSERT INTO tc_tasks
-                         (id, user_id, data, status, description, priority,
-                          entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
-                          parent_id, project_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        params![
-                            &uuid.to_string(),
-                            &self.user_id.to_string(),
-                            &data_str,
-                            &status,
-                            &description,
-                            &priority,
-                            &entry_at,
-                            &modified_at,
-                            &due_at,
-                            &scheduled_at,
-                            &start_at,
-                            &end_at,
-                            &wait_at,
-                            &parent_id,
-                            &project_id,
-                        ],
-                    )
-                    .context("Set task INSERT query")?;
-                if inserted != 1 {
-                    return Err(Error::Database(format!(
-                        "Set task INSERT wrote {inserted} rows for uuid={uuid}; expected 1"
-                    )));
-                }
-            }
-            n => {
-                return Err(Error::Database(format!(
-                    "Set task UPDATE affected {n} rows for uuid={uuid}; expected 0 or 1"
-                )));
-            }
+        } else {
+            t.execute(
+                "INSERT INTO tc_tasks
+                 (id, user_id, data, status, description, priority,
+                  entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
+                  parent_id, project_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    &uuid_str,
+                    &self.user_id.to_string(),
+                    &data_str,
+                    &status,
+                    &description,
+                    &priority,
+                    &entry_at,
+                    &modified_at,
+                    &due_at,
+                    &scheduled_at,
+                    &start_at,
+                    &end_at,
+                    &wait_at,
+                    &parent_id,
+                    &project_id,
+                ],
+            )
+            .context("Set task INSERT query")?;
         }
         Ok(())
     }
@@ -397,8 +392,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
             .map_err(|e| Error::Database(format!("Failed to serialize operation: {e}")))?;
         let t = self.get_txn()?;
         t.execute(
-            "INSERT INTO tc_operations (user_id, data) VALUES (?, ?)",
-            params![&self.user_id.to_string(), &data_str],
+            "INSERT INTO tc_operations (id, user_id, data, created_at) VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            params![&Uuid::now_v7().to_string(), &self.user_id.to_string(), &data_str],
         )
         .context("Add operation query")?;
         Ok(())
@@ -406,7 +401,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
 
     async fn remove_operation(&mut self, op: Operation) -> Result<()> {
         let t = self.get_txn()?;
-        let last: Option<(i64, String)> = t
+        let last: Option<(String, String)> = t
             .query_row(
                 "SELECT id, data FROM tc_operations ORDER BY id DESC LIMIT 1",
                 [],
@@ -429,7 +424,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         }
 
         let t = self.get_txn()?;
-        t.execute("DELETE FROM tc_operations WHERE id = ?", [last_id])
+        t.execute("DELETE FROM tc_operations WHERE id = ?", [&last_id])
             .context("Remove operation")?;
         Ok(())
     }
