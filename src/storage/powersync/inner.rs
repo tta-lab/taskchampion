@@ -3,6 +3,7 @@ use crate::operation::Operation;
 use crate::storage::send_wrapper::{WrappedStorage, WrappedStorageTxn};
 use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
+use chrono::Utc;
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
@@ -388,12 +389,16 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn add_operation(&mut self, op: Operation) -> Result<()> {
+        let created_at = match &op {
+            Operation::Update { timestamp, .. } => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+            _ => Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        };
         let data_str = serde_json::to_string(&op)
             .map_err(|e| Error::Database(format!("Failed to serialize operation: {e}")))?;
         let t = self.get_txn()?;
         t.execute(
-            "INSERT INTO tc_operations (id, user_id, data, created_at) VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
-            params![&Uuid::now_v7().to_string(), &self.user_id.to_string(), &data_str],
+            "INSERT INTO tc_operations (id, user_id, data, created_at) VALUES (?, ?, ?, ?)",
+            params![&Uuid::now_v7().to_string(), &self.user_id.to_string(), &data_str, &created_at],
         )
         .context("Add operation query")?;
         Ok(())
