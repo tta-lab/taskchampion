@@ -200,16 +200,9 @@ impl PowerSyncStorageInner {
             .query_row([], |_| Ok(()))
             .context("PowerSync init")?;
 
-        // tc_sync_meta is the only local-only table we need.
-        // tc_tasks and tc_operations are PowerSync-managed views.
-        // tc_working_set and tc_operations_sync are not used (PowerSync handles sync).
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS tc_sync_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );",
-        )
-        .context("Creating local-only tables")?;
+        // No local-only tables needed: tc_tasks and tc_operations are PowerSync-managed
+        // views; sync state (working-set, base_version, operations_sync) is unused since
+        // PowerSync handles replication externally via flicknote-sync.
 
         Ok(Self { conn, user_id })
     }
@@ -242,10 +235,6 @@ impl PowerSyncStorageInner {
                 user_id TEXT,
                 data TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS tc_sync_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
             );
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -494,28 +483,10 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn base_version(&mut self) -> Result<VersionId> {
-        let t = self.get_txn()?;
-        let version: Option<String> = t
-            .query_row(
-                "SELECT value FROM tc_sync_meta WHERE key = 'base_version'",
-                [],
-                |r| r.get("value"),
-            )
-            .optional()?;
-        match version {
-            None => Ok(DEFAULT_BASE_VERSION),
-            Some(s) => Uuid::parse_str(&s)
-                .map_err(|e| Error::Database(format!("Invalid base_version UUID: {e}"))),
-        }
+        Ok(DEFAULT_BASE_VERSION)
     }
 
-    async fn set_base_version(&mut self, version: VersionId) -> Result<()> {
-        let t = self.get_txn()?;
-        t.execute(
-            "INSERT OR REPLACE INTO tc_sync_meta (key, value) VALUES ('base_version', ?)",
-            [&version.to_string()],
-        )
-        .context("Set base version")?;
+    async fn set_base_version(&mut self, _version: VersionId) -> Result<()> {
         Ok(())
     }
 

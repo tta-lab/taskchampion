@@ -180,16 +180,6 @@ macro_rules! storage_tests_no_sync {
         }
 
         #[tokio::test]
-        async fn base_version_default() -> $crate::errors::Result<()> {
-            $crate::storage::test::base_version_default($storage).await
-        }
-
-        #[tokio::test]
-        async fn base_version_setting() -> $crate::errors::Result<()> {
-            $crate::storage::test::base_version_setting($storage).await
-        }
-
-        #[tokio::test]
         async fn task_operations() -> $crate::errors::Result<()> {
             $crate::storage::test::task_operations($storage).await
         }
