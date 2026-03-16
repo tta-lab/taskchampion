@@ -3,8 +3,8 @@ use crate::operation::Operation;
 use crate::storage::send_wrapper::{WrappedStorage, WrappedStorageTxn};
 use crate::storage::{TaskMap, VersionId, DEFAULT_BASE_VERSION};
 use anyhow::Context;
-use chrono::Utc;
 use async_trait::async_trait;
+use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 use uuid::Uuid;
@@ -13,6 +13,8 @@ use super::columns::{
     extract_timestamp, query_task_rows, raw_to_task, read_raw_task_row, TASK_SELECT_COLS,
 };
 use super::extension::init_powersync_extension;
+
+const TS_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
 pub(super) struct PowerSyncStorageInner {
     conn: Connection,
@@ -389,16 +391,24 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn add_operation(&mut self, op: Operation) -> Result<()> {
+        // Only Update carries a timestamp; Create, Delete, and UndoPoint don't have one.
         let created_at = match &op {
-            Operation::Update { timestamp, .. } => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-            _ => Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+            Operation::Update { timestamp, .. } => timestamp.format(TS_FMT).to_string(),
+            Operation::Create { .. } | Operation::Delete { .. } | Operation::UndoPoint => {
+                Utc::now().format(TS_FMT).to_string()
+            }
         };
         let data_str = serde_json::to_string(&op)
             .map_err(|e| Error::Database(format!("Failed to serialize operation: {e}")))?;
         let t = self.get_txn()?;
         t.execute(
             "INSERT INTO tc_operations (id, user_id, data, created_at) VALUES (?, ?, ?, ?)",
-            params![&Uuid::now_v7().to_string(), &self.user_id.to_string(), &data_str, &created_at],
+            params![
+                &Uuid::now_v7().to_string(),
+                &self.user_id.to_string(),
+                &data_str,
+                &created_at
+            ],
         )
         .context("Add operation query")?;
         Ok(())
