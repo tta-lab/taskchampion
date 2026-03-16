@@ -287,7 +287,6 @@ impl<'t> PowerSyncTxn<'t> {
             .as_ref()
             .ok_or_else(|| Error::Database("Transaction already committed".into()))
     }
-
 }
 
 #[async_trait(?Send)]
