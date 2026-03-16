@@ -252,50 +252,63 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let data_str = serde_json::to_string(&task_data)
             .map_err(|e| Error::Database(format!("Failed to serialize task data: {e}")))?;
 
-        // Use upsert (INSERT ... ON CONFLICT DO UPDATE) rather than INSERT OR REPLACE.
-        // INSERT OR REPLACE performs a DELETE + INSERT, which resets any columns not in
-        // the INSERT list and may interfere with PowerSync's change-tracking triggers.
+        // PowerSync views don't support UPSERT (INSERT ... ON CONFLICT DO UPDATE).
+        // Use UPDATE-then-INSERT: try UPDATE first, INSERT if row doesn't exist.
         let t = self.get_txn()?;
-        t.execute(
-            "INSERT INTO tc_tasks
-             (id, user_id, data, status, description, priority,
-              entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
-              parent_id, project_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               user_id = excluded.user_id,
-               data = excluded.data,
-               status = excluded.status,
-               description = excluded.description,
-               priority = excluded.priority,
-               entry_at = excluded.entry_at,
-               modified_at = excluded.modified_at,
-               due_at = excluded.due_at,
-               scheduled_at = excluded.scheduled_at,
-               start_at = excluded.start_at,
-               end_at = excluded.end_at,
-               wait_at = excluded.wait_at,
-               parent_id = excluded.parent_id,
-               project_id = excluded.project_id",
-            params![
-                &uuid.to_string(),
-                &self.user_id.to_string(),
-                &data_str,
-                &status,
-                &description,
-                &priority,
-                &entry_at,
-                &modified_at,
-                &due_at,
-                &scheduled_at,
-                &start_at,
-                &end_at,
-                &wait_at,
-                &parent_id,
-                &project_id,
-            ],
-        )
-        .context("Set task query")?;
+        let updated = t
+            .execute(
+                "UPDATE tc_tasks SET
+                   user_id = ?, data = ?, status = ?, description = ?, priority = ?,
+                   entry_at = ?, modified_at = ?, due_at = ?, scheduled_at = ?,
+                   start_at = ?, end_at = ?, wait_at = ?, parent_id = ?, project_id = ?
+                 WHERE id = ?",
+                params![
+                    &self.user_id.to_string(),
+                    &data_str,
+                    &status,
+                    &description,
+                    &priority,
+                    &entry_at,
+                    &modified_at,
+                    &due_at,
+                    &scheduled_at,
+                    &start_at,
+                    &end_at,
+                    &wait_at,
+                    &parent_id,
+                    &project_id,
+                    &uuid.to_string(),
+                ],
+            )
+            .context("Set task UPDATE query")?;
+
+        if updated == 0 {
+            t.execute(
+                "INSERT INTO tc_tasks
+                 (id, user_id, data, status, description, priority,
+                  entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
+                  parent_id, project_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    &uuid.to_string(),
+                    &self.user_id.to_string(),
+                    &data_str,
+                    &status,
+                    &description,
+                    &priority,
+                    &entry_at,
+                    &modified_at,
+                    &due_at,
+                    &scheduled_at,
+                    &start_at,
+                    &end_at,
+                    &wait_at,
+                    &parent_id,
+                    &project_id,
+                ],
+            )
+            .context("Set task INSERT query")?;
+        }
         Ok(())
     }
 
