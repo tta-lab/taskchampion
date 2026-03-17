@@ -442,17 +442,12 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         }
 
         // Sync annotations: delete all existing rows for this task, then insert current set.
-        t.execute(
-            "DELETE FROM tc_annotations WHERE task_id = ?",
-            [&uuid_str],
-        )
-        .context("Delete existing annotations")?;
+        t.execute("DELETE FROM tc_annotations WHERE task_id = ?", [&uuid_str])
+            .context("Delete existing annotations")?;
         for (epoch, description) in &annotations {
             let entry_at = DateTime::from_timestamp(*epoch, 0)
                 .map(|dt| dt.to_rfc3339())
-                .ok_or_else(|| {
-                    Error::Database(format!("Invalid annotation timestamp: {epoch}"))
-                })?;
+                .ok_or_else(|| Error::Database(format!("Invalid annotation timestamp: {epoch}")))?;
             t.execute(
                 "INSERT INTO tc_annotations (id, task_id, user_id, entry_at, description) VALUES (?, ?, ?, ?, ?)",
                 params![
@@ -640,4 +635,3 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         Ok(())
     }
 }
-
