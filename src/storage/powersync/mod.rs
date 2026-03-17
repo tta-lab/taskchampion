@@ -228,6 +228,7 @@ mod test {
             task.insert("status".into(), "pending".into());
             task.insert("tag_work".into(), String::new());
             task.insert("annotation_1635301873".into(), "note".into());
+            task.insert("position".into(), "80".into());
             task.insert("dep_some-uuid".into(), String::new());
             task.insert("my_uda".into(), "custom value".into());
             txn.set_task(uuid, task).await?;
@@ -251,6 +252,10 @@ mod test {
         assert!(
             !obj.keys().any(|k| k.starts_with("annotation_")),
             "annotation_* keys should not be in data blob, got: {obj:?}"
+        );
+        assert!(
+            !obj.contains_key("position"),
+            "position should not be in data blob, got: {obj:?}"
         );
         assert!(
             obj.contains_key("dep_some-uuid"),
