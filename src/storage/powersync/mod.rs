@@ -67,6 +67,7 @@ mod test {
         task.insert("priority".into(), "H".into());
         let parent_uuid = Uuid::new_v4();
         task.insert("parent".into(), parent_uuid.to_string());
+        task.insert("position".into(), "80".into());
 
         txn.set_task(uuid, task.clone()).await?;
         txn.commit().await?;
@@ -84,6 +85,7 @@ mod test {
             got.get("parent").map(String::as_str),
             Some(parent_uuid.to_string().as_str())
         );
+        assert_eq!(got.get("position").map(String::as_str), Some("80"));
         txn.commit().await?;
         Ok(())
     }
@@ -174,7 +176,10 @@ mod test {
         let task = txn.get_task(uuid).await?.unwrap();
         assert_eq!(task.get("tag_work").map(String::as_str), Some(""));
         assert_eq!(task.get("tag_next").map(String::as_str), Some(""));
-        assert!(task.get("tag_urgent").is_none(), "tag_urgent should be removed");
+        assert!(
+            task.get("tag_urgent").is_none(),
+            "tag_urgent should be removed"
+        );
         txn.commit().await?;
         Ok(())
     }
@@ -223,6 +228,7 @@ mod test {
             task.insert("status".into(), "pending".into());
             task.insert("tag_work".into(), String::new());
             task.insert("annotation_1635301873".into(), "note".into());
+            task.insert("position".into(), "80".into());
             task.insert("dep_some-uuid".into(), String::new());
             task.insert("my_uda".into(), "custom value".into());
             txn.set_task(uuid, task).await?;
@@ -239,12 +245,26 @@ mod test {
             .map_err(|e| crate::errors::Error::Database(e.to_string()))?;
         let obj = data_map.as_object().unwrap();
 
-        assert!(!obj.keys().any(|k| k.starts_with("tag_")),
-            "tag_* keys should not be in data blob, got: {obj:?}");
-        assert!(!obj.keys().any(|k| k.starts_with("annotation_")),
-            "annotation_* keys should not be in data blob, got: {obj:?}");
-        assert!(obj.contains_key("dep_some-uuid"), "dep_* should remain in data blob");
-        assert!(obj.contains_key("my_uda"), "UDAs should remain in data blob");
+        assert!(
+            !obj.keys().any(|k| k.starts_with("tag_")),
+            "tag_* keys should not be in data blob, got: {obj:?}"
+        );
+        assert!(
+            !obj.keys().any(|k| k.starts_with("annotation_")),
+            "annotation_* keys should not be in data blob, got: {obj:?}"
+        );
+        assert!(
+            !obj.contains_key("position"),
+            "position should not be in data blob, got: {obj:?}"
+        );
+        assert!(
+            obj.contains_key("dep_some-uuid"),
+            "dep_* should remain in data blob"
+        );
+        assert!(
+            obj.contains_key("my_uda"),
+            "UDAs should remain in data blob"
+        );
         Ok(())
     }
 
@@ -349,7 +369,10 @@ mod test {
         let all = txn.all_tasks().await?;
         txn.commit().await?;
 
-        let (_, task_map) = all.into_iter().find(|(u, _)| *u == uuid).expect("task not found");
+        let (_, task_map) = all
+            .into_iter()
+            .find(|(u, _)| *u == uuid)
+            .expect("task not found");
         assert_eq!(task_map.get("tag_home").map(String::as_str), Some(""));
         assert_eq!(
             task_map.get("annotation_1635301873").map(String::as_str),
@@ -370,7 +393,10 @@ mod test {
         let mut task = TaskMap::new();
         task.insert("annotation_not_an_epoch".into(), "oops".into());
         let result = txn.set_task(uuid, task).await;
-        assert!(result.is_err(), "expected error for non-integer annotation epoch");
+        assert!(
+            result.is_err(),
+            "expected error for non-integer annotation epoch"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("epoch suffix is not an integer"),
