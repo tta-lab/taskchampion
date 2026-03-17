@@ -204,39 +204,31 @@ mod tests {
     use super::*;
     use crate::{storage::inmemory::InMemoryStorage, Operations, Replica, Status};
 
-    async fn make_task(
-        replica: &mut Replica<InMemoryStorage>,
-        description: &str,
-    ) -> (Uuid, Task) {
+    async fn make_task(replica: &mut Replica<InMemoryStorage>, description: &str) -> (Uuid, Task) {
         let mut ops = Operations::new();
         let uuid = Uuid::new_v4();
         let mut task = replica.create_task(uuid, &mut ops).await.unwrap();
-        task.set_description(description.to_string(), &mut ops).unwrap();
+        task.set_description(description.to_string(), &mut ops)
+            .unwrap();
         task.set_status(Status::Pending, &mut ops).unwrap();
         replica.commit_operations(ops).await.unwrap();
         let task = replica.get_task(uuid).await.unwrap().unwrap();
         (uuid, task)
     }
 
-    async fn set_parent(
-        replica: &mut Replica<InMemoryStorage>,
-        child: Uuid,
-        parent: Uuid,
-    ) {
+    async fn set_parent(replica: &mut Replica<InMemoryStorage>, child: Uuid, parent: Uuid) {
         let mut ops = Operations::new();
         let mut task = replica.get_task(child).await.unwrap().unwrap();
-        task.set_value("parent", Some(parent.to_string()), &mut ops).unwrap();
+        task.set_value("parent", Some(parent.to_string()), &mut ops)
+            .unwrap();
         replica.commit_operations(ops).await.unwrap();
     }
 
-    async fn set_position(
-        replica: &mut Replica<InMemoryStorage>,
-        uuid: Uuid,
-        pos: &str,
-    ) {
+    async fn set_position(replica: &mut Replica<InMemoryStorage>, uuid: Uuid, pos: &str) {
         let mut ops = Operations::new();
         let mut task = replica.get_task(uuid).await.unwrap().unwrap();
-        task.set_value("position", Some(pos.to_string()), &mut ops).unwrap();
+        task.set_value("position", Some(pos.to_string()), &mut ops)
+            .unwrap();
         replica.commit_operations(ops).await.unwrap();
     }
 
@@ -298,7 +290,8 @@ mod tests {
         {
             let mut ops = Operations::new();
             let mut task = rep.get_task(uuid).await.unwrap().unwrap();
-            task.set_value("parent", Some("not-a-uuid".to_string()), &mut ops).unwrap();
+            task.set_value("parent", Some("not-a-uuid".to_string()), &mut ops)
+                .unwrap();
             rep.commit_operations(ops).await.unwrap();
         }
         let tasks = rep.all_tasks().await.unwrap();

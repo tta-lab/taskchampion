@@ -310,10 +310,16 @@ mod tests {
         let b1_pos = &specs[4].position;
         // A1 and B1 are both first children in their respective groups,
         // so they should start from the same base position.
-        assert_eq!(a1_pos, b1_pos, "first sibling positions should restart per level");
+        assert_eq!(
+            a1_pos, b1_pos,
+            "first sibling positions should restart per level"
+        );
         let a2_pos = &specs[2].position;
         let b2_pos = &specs[5].position;
-        assert_eq!(a2_pos, b2_pos, "second sibling positions should restart per level");
+        assert_eq!(
+            a2_pos, b2_pos,
+            "second sibling positions should restart per level"
+        );
     }
 
     #[test]
