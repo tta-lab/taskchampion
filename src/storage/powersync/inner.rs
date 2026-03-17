@@ -133,6 +133,7 @@ impl PowerSyncStorageInner {
                 end_at TEXT,
                 wait_at TEXT,
                 parent_id TEXT,
+                position TEXT,
                 project_id TEXT
             );
             CREATE TABLE IF NOT EXISTS tc_operations (
@@ -296,6 +297,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let description = task_data.remove("description");
         let priority = task_data.remove("priority");
         let parent_id = task_data.remove("parent");
+        let position = task_data.remove("position");
 
         // Extract and convert timestamp columns. An Err propagates immediately,
         // aborting set_task before any DB write, so no partial state is committed.
@@ -371,7 +373,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                 "UPDATE tc_tasks SET
                    user_id = ?, data = ?, status = ?, description = ?, priority = ?,
                    entry_at = ?, modified_at = ?, due_at = ?, scheduled_at = ?,
-                   start_at = ?, end_at = ?, wait_at = ?, parent_id = ?, project_id = ?
+                   start_at = ?, end_at = ?, wait_at = ?, parent_id = ?, position = ?, project_id = ?
                  WHERE id = ?",
                 params![
                     &self.user_id.to_string(),
@@ -387,6 +389,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                     &end_at,
                     &wait_at,
                     &parent_id,
+                    &position,
                     &project_id,
                     &uuid_str,
                 ],
@@ -397,8 +400,8 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                 "INSERT INTO tc_tasks
                  (id, user_id, data, status, description, priority,
                   entry_at, modified_at, due_at, scheduled_at, start_at, end_at, wait_at,
-                  parent_id, project_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  parent_id, position, project_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     &uuid_str,
                     &self.user_id.to_string(),
@@ -414,6 +417,7 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
                     &end_at,
                     &wait_at,
                     &parent_id,
+                    &position,
                     &project_id,
                 ],
             )
