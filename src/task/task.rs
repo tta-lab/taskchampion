@@ -278,6 +278,21 @@ impl Task {
         self.get_timestamp(Prop::Due.as_ref())
     }
 
+    /// Get the parent task UUID, if this task is a subtask.
+    pub fn get_parent(&self) -> Option<Uuid> {
+        self.data
+            .get("parent")
+            .and_then(|s| Uuid::parse_str(s).ok())
+    }
+
+    /// Set or clear the parent task UUID.
+    ///
+    /// Pass `Some(uuid)` to make this task a child of `uuid`, or `None` to remove the
+    /// parent relationship.
+    pub fn set_parent(&mut self, parent: Option<Uuid>, ops: &mut Operations) -> Result<()> {
+        self.set_value("parent", parent.map(|u| u.to_string()), ops)
+    }
+
     /// Get the UUIDs of tasks on which this task depends.
     ///
     /// This includes all dependencies, regardless of their status.  In fact, it may include

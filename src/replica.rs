@@ -5,6 +5,7 @@ use crate::server::Server;
 use crate::storage::{Storage, TaskMap};
 use crate::task::{Status, Task};
 use crate::taskdb::TaskDb;
+use crate::treemap::TreeMap;
 use crate::workingset::WorkingSet;
 use crate::{Error, TaskData};
 use anyhow::Context;
@@ -243,6 +244,19 @@ impl<S: Storage> Replica<S> {
 
         // at this point self.depmap is guaranteed to be Some(_)
         Ok(self.depmap.as_ref().unwrap().clone())
+    }
+
+    /// Get the tree map for all tasks.
+    ///
+    /// The tree map represents parent/child relationships between tasks using the `parent`
+    /// property.  Unlike [`Replica::dependency_map`], this scans *all* tasks (not just the
+    /// working set), so it includes completed and deleted tasks as well.
+    ///
+    /// The result is not cached — it is rebuilt on every call.  For typical task counts
+    /// this is fast enough; caching can be added later if profiling shows a need.
+    pub async fn tree_map(&mut self) -> Result<Arc<TreeMap>> {
+        let tasks = self.all_tasks().await?;
+        Ok(Arc::new(TreeMap::from_tasks(&tasks)))
     }
 
     /// Get an existing task by its UUID
