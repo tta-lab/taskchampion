@@ -257,8 +257,7 @@ mod tests {
     async fn set_position(replica: &mut Replica<InMemoryStorage>, uuid: Uuid, pos: &str) {
         let mut ops = Operations::new();
         let mut task = replica.get_task(uuid).await.unwrap().unwrap();
-        task.set_value("position", Some(pos.to_string()), &mut ops)
-            .unwrap();
+        task.set_position(Some(pos.to_string()), &mut ops).unwrap();
         replica.commit_operations(ops).await.unwrap();
     }
 
