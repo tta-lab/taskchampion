@@ -54,9 +54,7 @@ mod test {
     use crate::storage::TaskMap;
 
     async fn storage() -> Result<PowerSyncStorage> {
-        Ok(PowerSyncStorage(
-            Wrapper::new(async || PowerSyncStorageInner::new_for_test()).await?,
-        ))
+        PowerSyncStorage::new_for_test().await
     }
 
     crate::storage::test::storage_tests_no_sync!(storage().await?);
