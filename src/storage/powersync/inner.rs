@@ -113,7 +113,7 @@ impl PowerSyncStorageInner {
     }
 
     /// Create an in-memory database with all required tables for testing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) fn new_for_test() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
