@@ -43,7 +43,7 @@ storage-powersync = ["dep:rusqlite", "dep:powersync_core", "rusqlite/bundled"]
 # Support for IndexedDB task storage
 storage-indexeddb = ["dep:idb", "dep:web-sys"]
 # Expose *_for_test() constructors for use in external crate tests
-test-utils = []
+test-utils = ["storage-powersync"]
 
 # (private) Support for sync protocol encryption
 encryption = ["dep:ring"]
