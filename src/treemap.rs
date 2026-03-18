@@ -22,6 +22,7 @@ use crate::task::{Status, Task};
 ///
 /// Check [`TreeMap::had_invalid_data`] after construction to detect corrupted
 /// parent UUID values in the task set.
+#[derive(Clone)]
 pub struct TreeMap {
     children: HashMap<Uuid, Vec<Uuid>>,
     parent: HashMap<Uuid, Uuid>,
