@@ -1212,4 +1212,62 @@ mod tests {
             HashSet::from([])
         );
     }
+
+    #[tokio::test]
+    async fn tree_map() {
+        let mut rep = Replica::new(InMemoryStorage::new());
+
+        // Create a parent task and three children with positions
+        let parent_uuid = Uuid::new_v4();
+        let child1_uuid = Uuid::new_v4();
+        let child2_uuid = Uuid::new_v4();
+        let child3_uuid = Uuid::new_v4();
+
+        let mut ops = Operations::new();
+        let mut parent = rep.create_task(parent_uuid, &mut ops).await.unwrap();
+        parent.set_status(Status::Pending, &mut ops).unwrap();
+
+        let mut c1 = rep.create_task(child1_uuid, &mut ops).await.unwrap();
+        c1.set_status(Status::Pending, &mut ops).unwrap();
+        c1.set_parent(Some(parent_uuid), &mut ops).unwrap();
+        c1.set_position(Some("80".into()), &mut ops).unwrap();
+
+        let mut c2 = rep.create_task(child2_uuid, &mut ops).await.unwrap();
+        c2.set_status(Status::Pending, &mut ops).unwrap();
+        c2.set_parent(Some(parent_uuid), &mut ops).unwrap();
+        c2.set_position(Some("V0".into()), &mut ops).unwrap();
+
+        let mut c3 = rep.create_task(child3_uuid, &mut ops).await.unwrap();
+        c3.set_status(Status::Completed, &mut ops).unwrap();
+        c3.set_parent(Some(parent_uuid), &mut ops).unwrap();
+
+        rep.commit_operations(ops).await.unwrap();
+
+        let tm = rep.tree_map().await.unwrap();
+
+        // Parent is a root
+        assert!(tm.roots().contains(&parent_uuid));
+        // Children are not roots
+        assert!(!tm.roots().contains(&child1_uuid));
+        assert!(!tm.roots().contains(&child2_uuid));
+
+        // tree_map scans all tasks — completed child3 is included
+        let children = tm.children(parent_uuid);
+        assert_eq!(children.len(), 3);
+        // Positioned children come first in lex order
+        assert_eq!(children[0], child1_uuid); // "80"
+        assert_eq!(children[1], child2_uuid); // "V0"
+
+        // All three are descendants
+        let desc = tm.descendants(parent_uuid);
+        assert!(desc.contains(&child1_uuid));
+        assert!(desc.contains(&child2_uuid));
+        assert!(desc.contains(&child3_uuid));
+
+        // Only pending children returned by pending_child_ids
+        let pending = tm.pending_child_ids(parent_uuid);
+        assert!(pending.contains(&child1_uuid));
+        assert!(pending.contains(&child2_uuid));
+        assert!(!pending.contains(&child3_uuid)); // completed
+    }
 }

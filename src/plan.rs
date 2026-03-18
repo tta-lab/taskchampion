@@ -12,7 +12,7 @@
 //!
 //! let parent = Uuid::new_v4();
 //! let sections = parse_markdown("## Step 1\nDo this first.\n\n## Step 2\nThen this.");
-//! let specs = plan_tasks(parent, &sections, 0, sections.len());
+//! let specs = plan_tasks(parent, &sections);
 //! assert_eq!(specs.len(), 2);
 //! assert_eq!(specs[0].description, "Step 1");
 //! assert_eq!(specs[0].annotation.as_deref(), Some("Do this first."));
@@ -102,12 +102,13 @@ pub fn parse_markdown(input: &str) -> Vec<Section> {
 
 /// Convert a slice of sections into a flat list of [`TaskSpec`] values.
 ///
-/// The top-level call is `plan_tasks(parent, &sections, 0, sections.len())`.
-/// The function recurses into nested heading levels, generating independently-ordered
+/// Recurses into nested heading levels, generating independently-ordered
 /// positions for each sibling group.
-///
-/// Returns an empty vec when `start == end`.
-pub fn plan_tasks(parent: Uuid, sections: &[Section], start: usize, end: usize) -> Vec<TaskSpec> {
+pub fn plan_tasks(parent: Uuid, sections: &[Section]) -> Vec<TaskSpec> {
+    plan_tasks_inner(parent, sections, 0, sections.len())
+}
+
+fn plan_tasks_inner(parent: Uuid, sections: &[Section], start: usize, end: usize) -> Vec<TaskSpec> {
     let mut result = Vec::new();
 
     // Collect direct children at this level first to count siblings.
@@ -147,7 +148,7 @@ pub fn plan_tasks(parent: Uuid, sections: &[Section], start: usize, end: usize) 
         // Recurse into children
         let sub_start = *section_idx + 1;
         if *child_end > sub_start {
-            let mut children = plan_tasks(task_uuid, sections, sub_start, *child_end);
+            let mut children = plan_tasks_inner(task_uuid, sections, sub_start, *child_end);
             result.append(&mut children);
         }
     }
@@ -252,7 +253,7 @@ mod tests {
     fn single_section_spec() {
         let parent = Uuid::new_v4();
         let sections = parse_markdown("## Step 1");
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].parent, parent);
         assert_eq!(specs[0].description, "Step 1");
@@ -264,7 +265,7 @@ mod tests {
     fn two_sibling_sections() {
         let parent = Uuid::new_v4();
         let sections = parse_markdown("## Step 1\n## Step 2");
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs.len(), 2);
         assert!(specs[1].position > specs[0].position);
     }
@@ -274,7 +275,7 @@ mod tests {
         let parent = Uuid::new_v4();
         let input = "## Phase 1\n### Task A";
         let sections = parse_markdown(input);
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs.len(), 2);
         // First spec is Phase 1, parent is `parent`
         assert_eq!(specs[0].parent, parent);
@@ -289,7 +290,7 @@ mod tests {
         let parent = Uuid::new_v4();
         let input = "## L1\n### L2\n#### L3";
         let sections = parse_markdown(input);
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs.len(), 3);
         assert_eq!(specs[0].parent, parent);
         assert_eq!(specs[1].parent, specs[0].uuid);
@@ -303,7 +304,7 @@ mod tests {
         let parent = Uuid::new_v4();
         let input = "## A\n### A1\n### A2\n## B\n### B1\n### B2";
         let sections = parse_markdown(input);
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         // specs: A, A1, A2, B, B1, B2
         assert_eq!(specs.len(), 6);
         let a1_pos = &specs[1].position;
@@ -326,7 +327,7 @@ mod tests {
     fn annotation_some_when_body_present() {
         let parent = Uuid::new_v4();
         let sections = parse_markdown("## Step 1\nSome body text.");
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs[0].annotation.as_deref(), Some("Some body text."));
     }
 
@@ -334,15 +335,14 @@ mod tests {
     fn annotation_none_when_empty_body() {
         let parent = Uuid::new_v4();
         let sections = parse_markdown("## Step 1");
-        let specs = plan_tasks(parent, &sections, 0, sections.len());
+        let specs = plan_tasks(parent, &sections);
         assert_eq!(specs[0].annotation, None);
     }
 
     #[test]
-    fn empty_range_returns_empty() {
+    fn empty_sections_returns_empty() {
         let parent = Uuid::new_v4();
-        let sections = parse_markdown("## Step 1");
-        let specs = plan_tasks(parent, &sections, 0, 0);
+        let specs = plan_tasks(parent, &[]);
         assert!(specs.is_empty());
     }
 }

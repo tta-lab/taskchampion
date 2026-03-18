@@ -134,8 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn between_adjacent() {
-        // Invalid string input should error
+    fn between_invalid_string_inputs() {
         assert!(between_position("not-hex", "80").is_err());
         assert!(between_position("80", "not-hex").is_err());
     }
