@@ -29,6 +29,14 @@ impl PowerSyncStorage {
             Wrapper::new(async move || PowerSyncStorageInner::new(&path, user_id)).await?,
         ))
     }
+
+    /// Create an in-memory PowerSyncStorage with all required tables for testing.
+    #[cfg(test)]
+    pub async fn new_for_test() -> Result<Self> {
+        Ok(Self(
+            Wrapper::new(async || PowerSyncStorageInner::new_for_test()).await?,
+        ))
+    }
 }
 
 #[async_trait]
