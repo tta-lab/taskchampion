@@ -7,17 +7,21 @@
 mod depmap;
 mod errors;
 mod operation;
+pub mod plan;
+pub mod position;
 mod replica;
 pub mod server;
 pub mod storage;
 mod task;
 mod taskdb;
+mod treemap;
 mod utils;
 mod workingset;
 
 pub use depmap::DependencyMap;
 pub use errors::Error;
 pub use operation::{Operation, Operations};
+pub use position::{append_position, between_position, prepend_position, sequential_positions};
 pub use replica::Replica;
 pub use server::{Server, ServerConfig};
 #[cfg(all(target_arch = "wasm32", feature = "storage-indexeddb"))]
@@ -27,6 +31,7 @@ pub use storage::powersync::PowerSyncStorage;
 #[cfg(feature = "storage-sqlite")]
 pub use storage::sqlite::SqliteStorage;
 pub use task::{utc_timestamp, Annotation, Status, Tag, Task, TaskData};
+pub use treemap::TreeMap;
 pub use workingset::WorkingSet;
 
 /// Re-exported type from the `uuid` crate, for ease of compatibility for consumers of this crate.

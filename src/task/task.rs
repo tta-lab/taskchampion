@@ -278,6 +278,31 @@ impl Task {
         self.get_timestamp(Prop::Due.as_ref())
     }
 
+    /// Get the parent task UUID, if this task is a subtask.
+    pub fn get_parent(&self) -> Option<Uuid> {
+        self.data
+            .get("parent")
+            .and_then(|s| Uuid::parse_str(s).ok())
+    }
+
+    /// Set or clear the parent task UUID.
+    ///
+    /// Pass `Some(uuid)` to make this task a child of `uuid`, or `None` to remove the
+    /// parent relationship.
+    pub fn set_parent(&mut self, parent: Option<Uuid>, ops: &mut Operations) -> Result<()> {
+        self.set_value("parent", parent.map(|u| u.to_string()), ops)
+    }
+
+    /// Get this task's fractional-index position string, if set.
+    pub fn get_position(&self) -> Option<&str> {
+        self.data.get("position")
+    }
+
+    /// Set or clear the fractional-index position string used for sibling ordering.
+    pub fn set_position(&mut self, position: Option<String>, ops: &mut Operations) -> Result<()> {
+        self.set_value("position", position, ops)
+    }
+
     /// Get the UUIDs of tasks on which this task depends.
     ///
     /// This includes all dependencies, regardless of their status.  In fact, it may include
@@ -1524,6 +1549,62 @@ mod test {
         assert!(!t2.has_tag(&stag(SyntheticTag::Blocked)));
         assert!(t2.has_tag(&stag(SyntheticTag::Unblocked)));
         assert!(t2.has_tag(&stag(SyntheticTag::Blocking)));
+    }
+
+    #[tokio::test]
+    async fn test_get_set_parent() {
+        let parent_uuid = Uuid::new_v4();
+        with_mut_task(
+            move |task, ops| {
+                task.set_parent(Some(parent_uuid), ops).unwrap();
+            },
+            move |task| {
+                assert_eq!(task.get_parent(), Some(parent_uuid));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_parent_none_clears() {
+        let parent_uuid = Uuid::new_v4();
+        with_mut_task(
+            move |task, ops| {
+                task.set_parent(Some(parent_uuid), ops).unwrap();
+                task.set_parent(None, ops).unwrap();
+            },
+            |task| {
+                assert_eq!(task.get_parent(), None);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_get_set_position() {
+        with_mut_task(
+            |task, ops| {
+                task.set_position(Some("80".into()), ops).unwrap();
+            },
+            |task| {
+                assert_eq!(task.get_position(), Some("80"));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_position_none_clears() {
+        with_mut_task(
+            |task, ops| {
+                task.set_position(Some("80".into()), ops).unwrap();
+                task.set_position(None, ops).unwrap();
+            },
+            |task| {
+                assert_eq!(task.get_position(), None);
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
