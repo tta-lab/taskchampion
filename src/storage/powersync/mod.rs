@@ -31,7 +31,7 @@ impl PowerSyncStorage {
     }
 
     /// Create an in-memory PowerSyncStorage with all required tables for testing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub async fn new_for_test() -> Result<Self> {
         Ok(Self(
             Wrapper::new(async || PowerSyncStorageInner::new_for_test()).await?,
