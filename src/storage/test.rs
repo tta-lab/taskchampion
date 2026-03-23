@@ -742,4 +742,3 @@ pub(super) async fn sync_complete(mut storage: impl Storage) -> Result<()> {
 
     Ok(())
 }
-

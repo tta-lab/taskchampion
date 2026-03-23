@@ -140,7 +140,6 @@ impl<'t> Txn<'t> {
             .as_ref()
             .ok_or(SqliteError::TransactionAlreadyCommitted)
     }
-
 }
 
 #[async_trait(?Send)]
