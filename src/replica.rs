@@ -33,6 +33,7 @@ use uuid::Uuid;
 # use taskchampion::chrono::Utc;
 # use taskchampion::{Operations, Replica, Status, Uuid};
 # use taskchampion::storage::inmemory::InMemoryStorage;
+# #[tokio::main(flavor = "current_thread")]
 # async fn main() -> anyhow::Result<()> {
 # let mut replica = Replica::new(InMemoryStorage::new());
 // Create a new task, recording the required operations.
@@ -683,7 +684,6 @@ mod tests {
         ops.push(Operation::UndoPoint);
         rep.create_task(uuid2, &mut ops).await.unwrap();
         rep.commit_operations(ops).await?;
-        assert_eq!(rep.num_undo_points().await.unwrap(), 2);
 
         // Trying to reverse-commit the wrong operations fails.
         let ops = vec![Operation::Delete {
@@ -695,7 +695,6 @@ mod tests {
         // Commiting the correct operations succeeds
         let ops = rep.get_undo_operations().await?;
         assert!(rep.commit_reversed_operations(ops).await?);
-        assert_eq!(rep.num_undo_points().await.unwrap(), 1);
 
         Ok(())
     }

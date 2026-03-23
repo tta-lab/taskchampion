@@ -26,6 +26,7 @@ An implementation is provided, but users of this crate can provide their own imp
 # use taskchampion::chrono::Utc;
 # use taskchampion::{Operations, Replica, Status, Uuid};
 # use taskchampion::storage::inmemory::InMemoryStorage;
+# #[tokio::main(flavor = "current_thread")]
 # async fn main() -> anyhow::Result<()> {
 # let mut replica = Replica::new(InMemoryStorage::new());
 // Create a new task, recording the required operations.
