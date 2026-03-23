@@ -50,13 +50,14 @@ impl PowerSyncStorage {
     /// - The caller retains ownership — this storage will NOT close the handle on drop
     /// - The handle must remain valid until this `PowerSyncStorage` is dropped
     /// - PowerSync SDK must have already initialized the connection
-    pub async unsafe fn from_handle(handle: *mut rusqlite::ffi::sqlite3, user_id: Uuid) -> Result<Self> {
+    pub async unsafe fn from_handle(
+        handle: *mut rusqlite::ffi::sqlite3,
+        user_id: Uuid,
+    ) -> Result<Self> {
         let ptr = SendPtr(handle);
         Ok(Self(
-            Wrapper::new(async move || unsafe {
-                PowerSyncStorageInner::from_handle(ptr, user_id)
-            })
-            .await?,
+            Wrapper::new(async move || unsafe { PowerSyncStorageInner::from_handle(ptr, user_id) })
+                .await?,
         ))
     }
 }
@@ -498,7 +499,8 @@ mod test {
         let handle = unsafe { conn.handle() };
 
         // 3. Create PowerSyncStorageInner::from_handle and do CRUD
-        let mut storage = unsafe { PowerSyncStorageInner::from_handle(SendPtr(handle), Uuid::nil())? };
+        let mut storage =
+            unsafe { PowerSyncStorageInner::from_handle(SendPtr(handle), Uuid::nil())? };
 
         let uuid = Uuid::new_v4();
         let mut txn = storage.txn().await?;
@@ -523,9 +525,7 @@ mod test {
         drop(storage);
 
         // 5. Original connection still works after storage is dropped (non-owning)
-        let still_works: i64 = conn
-            .query_row("SELECT 1", [], |r| r.get(0))
-            .unwrap();
+        let still_works: i64 = conn.query_row("SELECT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(still_works, 1);
 
         // 6. Data written through from_handle is visible via the original connection
@@ -536,7 +536,10 @@ mod test {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "data written via from_handle should be visible through original connection");
+        assert_eq!(
+            count, 1,
+            "data written via from_handle should be visible through original connection"
+        );
 
         Ok(())
     }
