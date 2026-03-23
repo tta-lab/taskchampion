@@ -17,13 +17,13 @@ let package = Package(
         // Generated Swift bindings that call into the C FFI layer
         .target(
             name: "TaskChampionFFI",
-            dependencies: ["taskchampion_ffiFFI"],
+            dependencies: ["TaskChampionFFIFFI"],
             path: "Sources/TaskChampionFFI"
         ),
         // Pre-built static library + C headers (produced by scripts/build_xcframework.sh)
         .binaryTarget(
-            name: "taskchampion_ffiFFI",
-            path: "taskchampion_ffiFFI.xcframework"
+            name: "TaskChampionFFIFFI",
+            path: "TaskChampionFFIFFI.xcframework"
         ),
     ]
 )

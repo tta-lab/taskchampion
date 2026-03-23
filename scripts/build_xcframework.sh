@@ -12,21 +12,24 @@
 #   ./scripts/build_xcframework.sh
 #
 # Outputs:
-#   taskchampion_ffiFFI.xcframework/  — XCFramework with static libs + headers
-#   Sources/TaskChampionFFI/          — Generated Swift bindings
+#   TaskChampionFFIFFI.xcframework/  — XCFramework with static libs + headers
+#   Sources/TaskChampionFFI/         — Generated Swift bindings
 #
 # Notes:
 #   - The crate declares crate-type = ["cdylib", "staticlib", "rlib"]. Cargo
 #     builds all three for each target. The cdylib (.dylib) output is unused —
 #     only the staticlib (.a) goes into the XCFramework. Linker warnings about
 #     the cdylib are expected and harmless.
+#   - The XCFramework and C module are named TaskChampionFFIFFI — derived from
+#     uniffi.toml module_name = "TaskChampionFFI" plus the "FFI" suffix that
+#     UniFFI appends to all C-layer artifacts.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
-XCFRAMEWORK_NAME="taskchampion_ffiFFI"
+XCFRAMEWORK_NAME="TaskChampionFFIFFI"
 XCFRAMEWORK_DIR="${PROJECT_ROOT}/${XCFRAMEWORK_NAME}.xcframework"
 SWIFT_OUT_DIR="${PROJECT_ROOT}/Sources/TaskChampionFFI"
 
@@ -96,10 +99,10 @@ cp "${BUILD_DIR}/generated/TaskChampionFFI.swift" "${SWIFT_OUT_DIR}/TaskChampion
 echo "==> Preparing headers..."
 HEADERS_DIR="${BUILD_DIR}/headers"
 mkdir -p "${HEADERS_DIR}"
-cp "${BUILD_DIR}/generated/taskchampion_ffiFFI.h" "${HEADERS_DIR}/taskchampion_ffiFFI.h"
+cp "${BUILD_DIR}/generated/${XCFRAMEWORK_NAME}.h" "${HEADERS_DIR}/${XCFRAMEWORK_NAME}.h"
 
 # UniFFI generates a modulemap, but xcodebuild needs it named module.modulemap
-cp "${BUILD_DIR}/generated/taskchampion_ffiFFI.modulemap" "${HEADERS_DIR}/module.modulemap"
+cp "${BUILD_DIR}/generated/${XCFRAMEWORK_NAME}.modulemap" "${HEADERS_DIR}/module.modulemap"
 
 # --- Create fat simulator library ---
 
