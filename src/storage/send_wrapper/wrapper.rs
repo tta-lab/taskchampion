@@ -228,23 +228,6 @@ impl StorageTxn for WrapperTxn {
         self.call(TxnMessage::SyncComplete).await
     }
 
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        self.call(TxnMessage::GetWorkingSet).await
-    }
-
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        self.call(|tx| TxnMessage::AddToWorkingSet(uuid, tx)).await
-    }
-
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()> {
-        self.call(|tx| TxnMessage::SetWorkingSetItem(index, uuid, tx))
-            .await
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
-        self.call(TxnMessage::ClearWorkingSet).await
-    }
-
     async fn is_empty(&mut self) -> Result<bool> {
         self.call(TxnMessage::IsEmpty).await
     }

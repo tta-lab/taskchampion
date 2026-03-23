@@ -260,7 +260,7 @@ mod test {
             old_value: None,
             timestamp: now1,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and synchronize those around
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
@@ -278,7 +278,7 @@ mod test {
             old_value: None,
             timestamp: now2,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         let mut ops = Operations::new();
         let now3 = now2 + chrono::Duration::seconds(1);
@@ -289,7 +289,7 @@ mod test {
             old_value: None,
             timestamp: now3,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and synchronize those around
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
@@ -366,7 +366,7 @@ mod test {
             old_value: None,
             timestamp: now1,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and synchronize those around
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
@@ -389,7 +389,7 @@ mod test {
             old_value: None,
             timestamp: now2,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and on db2, update a property of the task
         let mut ops = Operations::new();
@@ -401,7 +401,7 @@ mod test {
             old_value: None,
             timestamp: now3,
         });
-        db2.commit_operations(ops, |_| false).await?;
+        db2.commit_operations(ops).await?;
 
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
         sync(&mut server, db2.storage.txn().await?.as_mut(), false).await?;
@@ -494,7 +494,7 @@ mod test {
             old_value: None,
             timestamp: now1,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and synchronize those around
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
@@ -512,7 +512,7 @@ mod test {
             old_value: None,
             timestamp: now2,
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         // and on db2, update a property of the task
         let mut ops = Operations::new();
@@ -524,7 +524,7 @@ mod test {
             old_value: None,
             timestamp: now3,
         });
-        db2.commit_operations(ops, |_| false).await?;
+        db2.commit_operations(ops).await?;
 
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
         sync(&mut server, db2.storage.txn().await?.as_mut(), false).await?;
@@ -600,7 +600,7 @@ mod test {
             old_value: None,
             timestamp: Utc::now(),
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         test_server.set_snapshot_urgency(SnapshotUrgency::High);
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
@@ -624,7 +624,7 @@ mod test {
             old_value: None,
             timestamp: Utc::now(),
         });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
         sync(&mut server, db1.storage.txn().await?.as_mut(), false).await?;
 
         // delete the first version, so that db2 *must* initialize from
@@ -651,7 +651,7 @@ mod test {
         let uuid = Uuid::new_v4();
         let mut ops = Operations::new();
         ops.push(Operation::Create { uuid });
-        db1.commit_operations(ops, |_| false).await?;
+        db1.commit_operations(ops).await?;
 
         test_server.set_snapshot_urgency(SnapshotUrgency::Low);
         sync(&mut server, db1.storage.txn().await?.as_mut(), true).await?;
@@ -683,7 +683,7 @@ mod test {
             old_value: None,
             timestamp: Utc::now(),
         });
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         sync(&mut server, db.storage.txn().await?.as_mut(), true).await?;
         assert_eq!(test_server.versions_len(), 1);
@@ -702,7 +702,7 @@ mod test {
                 timestamp: Utc::now(),
             });
         }
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         // this sync batches the operations into two versions.
         sync(&mut server, db.storage.txn().await?.as_mut(), true).await?;
@@ -731,7 +731,7 @@ mod test {
             old_value: None,
             timestamp: Utc::now(),
         });
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         sync(&mut server, db.storage.txn().await?.as_mut(), true).await?;
         assert_eq!(test_server.versions_len(), 1);
@@ -746,7 +746,7 @@ mod test {
             old_value: None,
             timestamp: Utc::now(),
         });
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         sync(&mut server, db.storage.txn().await?.as_mut(), true).await?;
         assert_eq!(test_server.versions_len(), 2);

@@ -31,10 +31,6 @@ pub(super) enum TxnMessage {
     AddOperation(Operation, oneshot::Sender<Result<()>>),
     RemoveOperation(Operation, oneshot::Sender<Result<()>>),
     SyncComplete(oneshot::Sender<Result<()>>),
-    GetWorkingSet(oneshot::Sender<Result<Vec<Option<Uuid>>>>),
-    AddToWorkingSet(Uuid, oneshot::Sender<Result<usize>>),
-    SetWorkingSetItem(usize, Option<Uuid>, oneshot::Sender<Result<()>>),
-    ClearWorkingSet(oneshot::Sender<Result<()>>),
     IsEmpty(oneshot::Sender<Result<bool>>),
 }
 
@@ -130,18 +126,6 @@ impl<S: WrappedStorage> ActorImpl<S> {
                 }
                 TxnMessage::SyncComplete(resp) => {
                     let _ = resp.send(txn.sync_complete().await);
-                }
-                TxnMessage::GetWorkingSet(resp) => {
-                    let _ = resp.send(txn.get_working_set().await);
-                }
-                TxnMessage::AddToWorkingSet(u, resp) => {
-                    let _ = resp.send(txn.add_to_working_set(u).await);
-                }
-                TxnMessage::SetWorkingSetItem(i, u, resp) => {
-                    let _ = resp.send(txn.set_working_set_item(i, u).await);
-                }
-                TxnMessage::ClearWorkingSet(resp) => {
-                    let _ = resp.send(txn.clear_working_set().await);
                 }
                 TxnMessage::IsEmpty(resp) => {
                     let _ = resp.send(txn.is_empty().await);

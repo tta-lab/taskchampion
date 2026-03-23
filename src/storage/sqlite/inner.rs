@@ -141,19 +141,6 @@ impl<'t> Txn<'t> {
             .ok_or(SqliteError::TransactionAlreadyCommitted)
     }
 
-    fn get_next_working_set_number(&self) -> Result<usize> {
-        let t = self.get_txn()?;
-        let next_id: Option<usize> = t
-            .query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM working_set",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .context("Getting highest working set ID")?;
-
-        Ok(next_id.unwrap_or(0))
-    }
 }
 
 #[async_trait(?Send)]
@@ -176,7 +163,7 @@ impl WrappedStorageTxn for Txn<'_> {
         let t = self.get_txn()?;
 
         let mut q = t.prepare(
-            "SELECT tasks.* FROM tasks JOIN working_set ON tasks.uuid = working_set.uuid",
+            "SELECT uuid, data FROM tasks WHERE json_extract(data, '$.status') = 'pending'",
         )?;
         let rows = q.query_map([], |r| {
             let uuid: StoredUuid = r.get("uuid")?;
@@ -386,73 +373,6 @@ impl WrappedStorageTxn for Txn<'_> {
         )
         .context("Deleting orphaned operations")?;
 
-        Ok(())
-    }
-
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        let t = self.get_txn()?;
-
-        let mut q = t.prepare("SELECT id, uuid FROM working_set ORDER BY id ASC")?;
-        let rows = q
-            .query_map([], |r| {
-                let id: usize = r.get("id")?;
-                let uuid: StoredUuid = r.get("uuid")?;
-                Ok((id, uuid.0))
-            })
-            .context("Get working set query")?;
-
-        let rows: Vec<std::result::Result<(usize, Uuid), _>> = rows.collect();
-        let mut res = Vec::with_capacity(rows.len());
-        for _ in 0..self
-            .get_next_working_set_number()
-            .context("Getting working set number")?
-        {
-            res.push(None);
-        }
-        for r in rows {
-            let (id, uuid) = r?;
-            res[id] = Some(uuid);
-        }
-
-        Ok(res)
-    }
-
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        self.check_write_access()?;
-        let t = self.get_txn()?;
-
-        let next_working_id = self.get_next_working_set_number()?;
-
-        t.execute(
-            "INSERT INTO working_set (id, uuid) VALUES (?, ?)",
-            params![next_working_id, &StoredUuid(uuid)],
-        )
-        .context("Create task query")?;
-
-        Ok(next_working_id)
-    }
-
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()> {
-        self.check_write_access()?;
-        let t = self.get_txn()?;
-        match uuid {
-            // Add or override item
-            Some(uuid) => t.execute(
-                "INSERT OR REPLACE INTO working_set (id, uuid) VALUES (?, ?)",
-                params![index, &StoredUuid(uuid)],
-            ),
-            // Setting to None removes the row from database
-            None => t.execute("DELETE FROM working_set WHERE id = ?", [index]),
-        }
-        .context("Set working set item query")?;
-        Ok(())
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
-        self.check_write_access()?;
-        let t = self.get_txn()?;
-        t.execute("DELETE FROM working_set", [])
-            .context("Clear working set query")?;
         Ok(())
     }
 
@@ -766,11 +686,6 @@ mod test {
         assert!(is_read_only_err(txn.add_operation(op.clone()).await));
         assert!(is_read_only_err(txn.remove_operation(op).await));
         assert!(is_read_only_err(txn.sync_complete().await));
-        assert!(is_read_only_err(
-            txn.add_to_working_set(Uuid::new_v4()).await
-        ));
-        assert!(is_read_only_err(txn.set_working_set_item(1, None).await));
-        assert!(is_read_only_err(txn.clear_working_set().await));
         assert!(is_read_only_err(txn.commit().await));
 
         // Read-only things succeed.
@@ -781,7 +696,6 @@ mod test {
         assert_eq!(txn.get_task_operations(Uuid::new_v4()).await?.len(), 0);
         assert_eq!(txn.unsynced_operations().await?.len(), 0);
         assert_eq!(txn.num_unsynced_operations().await?, 0);
-        assert_eq!(txn.get_working_set().await?.len(), 1);
 
         Ok(())
     }

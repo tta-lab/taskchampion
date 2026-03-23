@@ -158,7 +158,7 @@ mod tests {
             old_value: Some("v2".into()),
             timestamp,
         });
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         let db_state = db.sorted_tasks().await;
 
@@ -182,7 +182,7 @@ mod tests {
             old_value: Some("v3".into()),
             timestamp,
         });
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         assert_eq!(
             db.operations().await.len(),

@@ -258,10 +258,9 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
         let t = self.get_txn()?;
         let sql = format!(
             "SELECT {TASK_SELECT_COLS}
-             FROM tc_working_set ws
-             INNER JOIN tc_tasks t ON ws.uuid = t.id
+             FROM tc_tasks t
              LEFT JOIN projects p ON t.project_id = p.id
-             WHERE ws.uuid IS NOT NULL"
+             WHERE t.status = 'pending'"
         );
         let mut tasks = query_task_rows(t, &sql, [])?;
         for (uuid, task_map) in &mut tasks {
@@ -605,24 +604,6 @@ impl WrappedStorageTxn for PowerSyncTxn<'_> {
     }
 
     async fn sync_complete(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    // Working set is not used with PowerSync; task numbering is not meaningful here.
-
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        Ok(vec![])
-    }
-
-    async fn add_to_working_set(&mut self, _uuid: Uuid) -> Result<usize> {
-        Ok(0)
-    }
-
-    async fn set_working_set_item(&mut self, _index: usize, _uuid: Option<Uuid>) -> Result<()> {
-        Ok(())
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
         Ok(())
     }
 

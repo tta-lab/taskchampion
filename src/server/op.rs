@@ -275,7 +275,7 @@ mod test {
         if let Some(o) = o2p {
             ops1.push(o.into_op());
         }
-        db1.commit_operations(ops1, |_| false).await.unwrap();
+        db1.commit_operations(ops1).await.unwrap();
 
         let mut db2 = TaskDb::new(InMemoryStorage::new());
         let mut ops2 = Operations::new();
@@ -286,7 +286,7 @@ mod test {
         if let Some(o) = o1p {
             ops2.push(o.into_op());
         }
-        db2.commit_operations(ops2, |_| false).await.unwrap();
+        db2.commit_operations(ops2).await.unwrap();
 
         assert_eq!(db1.sorted_tasks().await, db2.sorted_tasks().await);
     }
@@ -479,8 +479,8 @@ mod proptest_test {
                         ops2.push(o1p.into_op());
                     }
 
-                    db1.commit_operations(ops1, |_| false).await.unwrap();
-                    db2.commit_operations(ops2, |_| false).await.unwrap();
+                    db1.commit_operations(ops1).await.unwrap();
+                    db2.commit_operations(ops2).await.unwrap();
 
                     assert_eq!(db1.sorted_tasks().await, db2.sorted_tasks().await);
                 });

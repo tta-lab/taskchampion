@@ -10,7 +10,6 @@ pub(super) const OPERATIONS: &str = "operations";
 pub(super) const OPERATIONS_BY_UUID: &str = "operations_by_uuid";
 pub(super) const OPERATIONS_BY_UNSYNCED: &str = "operations_by_unsynced";
 pub(super) const SYNC_META: &str = "sync_meta";
-pub(super) const WORKING_SET: &str = "working_set";
 
 /* Current Schema:
  *
@@ -23,8 +22,6 @@ pub(super) const WORKING_SET: &str = "working_set";
  *
  *  - Object store `sync_meta` stores string values with string keys. At the moment it only stores
  *    the base revision.
- *
- *  - Object store `working_set` stores UUIDs as strings, keyed by the working set ID as an integer.
  */
 
 fn upgrade_0_to_1(db: Database) -> Result<()> {
@@ -52,12 +49,6 @@ fn upgrade_0_to_1(db: Database) -> Result<()> {
     params.key_path(None);
     params.auto_increment(false);
     db.create_object_store(SYNC_META, params)?;
-
-    // Create the `working_set` table
-    let mut params = idb::ObjectStoreParams::new();
-    params.key_path(None);
-    params.auto_increment(false);
-    db.create_object_store(WORKING_SET, params)?;
 
     Ok(())
 }

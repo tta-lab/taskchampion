@@ -13,7 +13,6 @@ struct Data {
     tasks: HashMap<Uuid, TaskMap>,
     base_version: VersionId,
     operations: Vec<(bool, Operation)>,
-    working_set: Vec<Option<Uuid>>,
 }
 
 struct Txn<'t> {
@@ -40,14 +39,6 @@ impl Txn<'_> {
             &self.storage.data
         }
     }
-
-    // Remove any "None" items from the end of the working set.
-    fn normalize_working_set(&mut self) {
-        let working_set = &mut self.mut_data_ref().working_set;
-        while let Some(None) = &working_set[1..].last() {
-            working_set.pop();
-        }
-    }
 }
 
 #[async_trait]
@@ -61,24 +52,17 @@ impl StorageTxn for Txn<'_> {
 
     async fn get_pending_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
         let res = self
-            .get_working_set()
-            .await?
+            .data_ref()
+            .tasks
             .iter()
-            .filter_map(|uuid| {
-                // Since uuid is wrapped in an Option and get(&inner_uuid)
-                // also returns an Option, the resulting type will be
-                // Option<Option<(Uuid, TaskMap)>>. To turn that into
-                // an Option<(Uuid, TaskMap)>, flatten is called
-                uuid.map(|inner_uuid| {
-                    self.data_ref()
-                        .tasks
-                        .get(&inner_uuid)
-                        .map(|taskmap| (inner_uuid, taskmap.clone()))
-                })
-                .flatten()
+            .filter(|(_, taskmap)| {
+                taskmap
+                    .get("status")
+                    .map(|s| s == "pending")
+                    .unwrap_or(false)
             })
-            .collect::<Vec<_>>();
-
+            .map(|(uuid, taskmap)| (*uuid, taskmap.clone()))
+            .collect();
         Ok(res)
     }
 
@@ -195,34 +179,6 @@ impl StorageTxn for Txn<'_> {
         Ok(())
     }
 
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        Ok(self.data_ref().working_set.clone())
-    }
-
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        let working_set = &mut self.mut_data_ref().working_set;
-        working_set.push(Some(uuid));
-        Ok(working_set.len())
-    }
-
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()> {
-        let working_set = &mut self.mut_data_ref().working_set;
-        if index >= working_set.len() {
-            return Err(Error::Database(format!(
-                "Index {index} is not in the working set"
-            )));
-        }
-        working_set[index] = uuid;
-
-        self.normalize_working_set();
-        Ok(())
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
-        self.mut_data_ref().working_set = vec![None];
-        Ok(())
-    }
-
     async fn commit(&mut self) -> Result<()> {
         // copy the new_data back into storage to commit the transaction
         if let Some(data) = self.new_data.take() {
@@ -246,7 +202,6 @@ impl InMemoryStorage {
                 tasks: HashMap::new(),
                 base_version: DEFAULT_BASE_VERSION,
                 operations: vec![],
-                working_set: vec![None],
             },
         }
     }

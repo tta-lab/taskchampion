@@ -6,7 +6,6 @@ use crate::storage::{Storage, TaskMap};
 use crate::task::{Status, Task};
 use crate::taskdb::TaskDb;
 use crate::treemap::TreeMap;
-use crate::workingset::WorkingSet;
 use crate::{Error, TaskData};
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
@@ -167,12 +166,6 @@ impl<S: Storage> Replica<S> {
         Ok(res)
     }
 
-    /// Get the "working set" for this replica.  This is a snapshot of the current state,
-    /// and it is up to the caller to decide how long to store this value.
-    pub async fn working_set(&mut self) -> Result<WorkingSet> {
-        Ok(WorkingSet::new(self.taskdb.working_set().await?))
-    }
-
     /// Get the dependency map for all pending tasks.
     ///
     /// A task dependency is recognized when a task in the working set depends on a task with
@@ -195,45 +188,38 @@ impl<S: Storage> Replica<S> {
             let mut dm = DependencyMap::new();
             // temporary cache tracking whether tasks are considered Pending or not.
             let mut is_pending_cache: HashMap<Uuid, bool> = HashMap::new();
-            let ws = self.working_set().await?;
-            // for each task in the working set
-            for i in 1..=ws.largest_index() {
-                // get the task UUID
-                if let Some(u) = ws.by_index(i) {
-                    // get the task
-                    if let Some(taskmap) = self.taskdb.get_task(u).await? {
-                        // search the task's keys
-                        for p in taskmap.keys() {
-                            // for one matching `dep_..`
-                            if let Some(dep_str) = p.strip_prefix("dep_") {
-                                // and extract the UUID from the key
-                                if let Ok(dep) = Uuid::parse_str(dep_str) {
-                                    // the dependency is pending if
-                                    let dep_pending = {
-                                        // we've determined this before and cached the result
-                                        if let Some(dep_pending) = is_pending_cache.get(&dep) {
-                                            *dep_pending
-                                        } else if let Some(dep_taskmap) =
-                                            // or if we get the task
-                                            self.taskdb.get_task(dep).await?
-                                        {
-                                            // and its status is "pending"
-                                            let dep_pending = matches!(
-                                                dep_taskmap
-                                                    .get("status")
-                                                    .map(|tm| Status::from_taskmap(tm)),
-                                                Some(Status::Pending)
-                                            );
-                                            is_pending_cache.insert(dep, dep_pending);
-                                            dep_pending
-                                        } else {
-                                            false
-                                        }
-                                    };
-                                    if dep_pending {
-                                        dm.add_dependency(u, dep);
-                                    }
+            let pending = self.taskdb.get_pending_tasks().await?;
+            for (u, taskmap) in &pending {
+                // search the task's keys
+                for p in taskmap.keys() {
+                    // for one matching `dep_..`
+                    if let Some(dep_str) = p.strip_prefix("dep_") {
+                        // and extract the UUID from the key
+                        if let Ok(dep) = Uuid::parse_str(dep_str) {
+                            // the dependency is pending if
+                            let dep_pending = {
+                                // we've determined this before and cached the result
+                                if let Some(dep_pending) = is_pending_cache.get(&dep) {
+                                    *dep_pending
+                                } else if let Some(dep_taskmap) =
+                                    // or if we get the task
+                                    self.taskdb.get_task(dep).await?
+                                {
+                                    // and its status is "pending"
+                                    let dep_pending = matches!(
+                                        dep_taskmap
+                                            .get("status")
+                                            .map(|tm| Status::from_taskmap(tm)),
+                                        Some(Status::Pending)
+                                    );
+                                    is_pending_cache.insert(dep, dep_pending);
+                                    dep_pending
+                                } else {
+                                    false
                                 }
+                            };
+                            if dep_pending {
+                                dm.add_dependency(*u, dep);
                             }
                         }
                     }
@@ -364,36 +350,14 @@ impl<S: Storage> Replica<S> {
 
     /// Commit a set of operations to the replica.
     ///
-    /// All local state on the replica will be updated accordingly, including the working set and
-    /// and temporarily cached data.
+    /// All local state on the replica will be updated accordingly, including temporarily cached
+    /// data.
     pub async fn commit_operations(&mut self, operations: Operations) -> Result<()> {
         if operations.is_empty() {
             return Ok(());
         }
 
-        // Add tasks to the working set when the status property is updated from anything other
-        // than pending or recurring to one of those two statuses.
-        let pending = Status::Pending.to_taskmap();
-        let recurring = Status::Recurring.to_taskmap();
-        let is_p_or_r = |val: &Option<String>| {
-            if let Some(val) = val {
-                val == pending || val == recurring
-            } else {
-                false
-            }
-        };
-        let add_to_working_set = |op: &Operation| match op {
-            Operation::Update {
-                property,
-                value,
-                old_value,
-                ..
-            } => property == "status" && !is_p_or_r(old_value) && is_p_or_r(value),
-            _ => false,
-        };
-        self.taskdb
-            .commit_operations(operations, add_to_working_set)
-            .await?;
+        self.taskdb.commit_operations(operations).await?;
 
         // The cached dependency map may now be invalid, do not retain it. Any existing Task values
         // will continue to use the old map.
@@ -402,9 +366,7 @@ impl<S: Storage> Replica<S> {
         Ok(())
     }
 
-    /// Synchronize this replica against the given server.  The working set is rebuilt after
-    /// this occurs, but without renumbering, so any newly-pending tasks should appear in
-    /// the working set.
+    /// Synchronize this replica against the given server.
     ///
     /// If `avoid_snapshots` is true, the sync operations produces a snapshot only when the server
     /// indicate it is urgent (snapshot urgency "high").  This allows time for other replicas to
@@ -421,9 +383,6 @@ impl<S: Storage> Replica<S> {
             .sync(server, avoid_snapshots)
             .await
             .context("Failed to synchronize with server")?;
-        self.rebuild_working_set(false)
-            .await
-            .context("Failed to rebuild working set after sync")?;
         Ok(())
     }
 
@@ -446,35 +405,10 @@ impl<S: Storage> Replica<S> {
             return Ok(false);
         }
 
-        // Both the dependency map and the working set are potentially now invalid.
+        // The dependency map is potentially now invalid.
         self.depmap = None;
-        self.rebuild_working_set(false)
-            .await
-            .context("Failed to rebuild working set after committing reversed operations")?;
 
         Ok(true)
-    }
-
-    /// Rebuild this replica's working set, based on whether tasks are pending or not.  If
-    /// `renumber` is true, then existing tasks may be moved to new working-set indices; in any
-    /// case, on completion all pending and recurring tasks are in the working set and all tasks
-    /// with other statuses are not.
-    pub async fn rebuild_working_set(&mut self, renumber: bool) -> Result<()> {
-        let pending = String::from(Status::Pending.to_taskmap());
-        let recurring = String::from(Status::Recurring.to_taskmap());
-        self.taskdb
-            .rebuild_working_set(
-                |t| {
-                    if let Some(st) = t.get("status") {
-                        st == &pending || st == &recurring
-                    } else {
-                        false
-                    }
-                },
-                renumber,
-            )
-            .await?;
-        Ok(())
     }
 
     /// Expire old, deleted tasks.
@@ -777,8 +711,6 @@ mod tests {
 
     #[tokio::test]
     async fn commit_operations() -> Result<()> {
-        // This mostly tests the working-set callback, as `TaskDB::commit_operations` has
-        // tests for the remaining functionality.
         let mut rep = Replica::new(InMemoryStorage::new());
 
         // Generate the depmap so later assertions can verify it is reset.
@@ -789,106 +721,7 @@ mod tests {
         let uuid1 = Uuid::new_v4();
         let mut t = rep.create_task(uuid1, &mut ops).await.unwrap();
         t.set_status(Status::Pending, &mut ops).unwrap();
-
-        // uuid2 is created and deleted, but this does not affect the
-        // working set.
-        let uuid2 = Uuid::new_v4();
-        ops.push(Operation::Create { uuid: uuid2 });
-        ops.push(Operation::Delete {
-            uuid: uuid2,
-            old_task: TaskMap::new(),
-        });
-
-        let update_op = |uuid, property: &str, old_value: Option<&str>, value: Option<&str>| {
-            Operation::Update {
-                uuid,
-                property: property.to_string(),
-                value: value.map(|v| v.to_string()),
-                timestamp: Utc::now(),
-                old_value: old_value.map(|v| v.to_string()),
-            }
-        };
-
-        // uuid3 has status deleted, so is not added to the working set.
-        let uuid3 = Uuid::new_v4();
-        ops.push(update_op(uuid3, "status", None, Some("deleted")));
-
-        // uuid4 goes from pending to pending, so is not added to the working set.
-        let uuid4 = Uuid::new_v4();
-        ops.push(update_op(uuid4, "status", Some("pending"), Some("pending")));
-
-        // uuid5 goes from recurring to recurring, so is not added to the working set.
-        let uuid5 = Uuid::new_v4();
-        ops.push(update_op(
-            uuid5,
-            "status",
-            Some("recurring"),
-            Some("recurring"),
-        ));
-
-        // uuid6 goes from recurring to pending, so is not added to the working set.
-        let uuid6 = Uuid::new_v4();
-        ops.push(update_op(
-            uuid6,
-            "status",
-            Some("recurring"),
-            Some("pending"),
-        ));
-
-        // uuid7 goes from pending to recurring, so is not added to the working set.
-        let uuid7 = Uuid::new_v4();
-        ops.push(update_op(
-            uuid7,
-            "status",
-            Some("pending"),
-            Some("recurring"),
-        ));
-
-        // uuid8 goes from no-status to recurring, so is added to the working set.
-        let uuid8 = Uuid::new_v4();
-        ops.push(update_op(uuid8, "status", None, Some("recurring")));
-
-        // uuid9 goes from no-status to pending, so is added to the working set.
-        let uuid9 = Uuid::new_v4();
-        ops.push(update_op(uuid9, "status", None, Some("pending")));
-
-        // uuid10 goes from deleted to pending, so is added to the working set.
-        let uuid10 = Uuid::new_v4();
-        ops.push(update_op(
-            uuid10,
-            "status",
-            Some("deleted"),
-            Some("pending"),
-        ));
-
-        // uuid11 goes from pending to deleted, so is not added to the working set.
-        let uuid11 = Uuid::new_v4();
-        ops.push(update_op(
-            uuid11,
-            "status",
-            Some("pending"),
-            Some("deleted"),
-        ));
-
-        // uuid12 goes from pending to no-status, so is not added to the working set.
-        let uuid12 = Uuid::new_v4();
-        ops.push(update_op(uuid12, "status", Some("pending"), None));
-
         rep.commit_operations(ops).await?;
-
-        let ws = rep.working_set().await?;
-        assert!(ws.by_uuid(uuid1).is_some());
-        assert!(ws.by_uuid(uuid2).is_none());
-        assert!(ws.by_uuid(uuid3).is_none());
-        assert!(ws.by_uuid(uuid4).is_none());
-        assert!(ws.by_uuid(uuid5).is_none());
-        assert!(ws.by_uuid(uuid6).is_none());
-        assert!(ws.by_uuid(uuid7).is_none());
-        assert!(ws.by_uuid(uuid8).is_some());
-        assert!(ws.by_uuid(uuid9).is_some());
-        assert!(ws.by_uuid(uuid10).is_some());
-        assert!(ws.by_uuid(uuid11).is_none());
-        assert!(ws.by_uuid(uuid12).is_none());
 
         // Cached dependency map was reset.
         assert!(rep.depmap.is_none());
@@ -949,11 +782,6 @@ mod tests {
         let t = rep.get_task(uuid).await.unwrap().unwrap();
         assert_eq!(t.get_status(), Status::Deleted);
         assert_eq!(t.get_description(), "gone");
-
-        rep.rebuild_working_set(true).await.unwrap();
-
-        let ws = rep.working_set().await.unwrap();
-        assert!(ws.by_uuid(t.get_uuid()).is_none());
     }
 
     #[tokio::test]
@@ -1004,65 +832,6 @@ mod tests {
             rep.get_task_operations(Uuid::new_v4()).await.unwrap(),
             vec![]
         );
-    }
-
-    #[tokio::test]
-    async fn rebuild_working_set_includes_recurring() {
-        let mut rep = Replica::new(InMemoryStorage::new());
-
-        let uuid = Uuid::new_v4();
-        let mut ops = Operations::new();
-        let mut t = rep.create_task(uuid, &mut ops).await.unwrap();
-        t.set_status(Status::Completed, &mut ops).unwrap();
-        rep.commit_operations(ops).await.unwrap();
-
-        let mut t = rep.get_task(uuid).await.unwrap().unwrap();
-        let mut ops = Operations::new();
-        t.set_status(Status::Recurring, &mut ops).unwrap();
-        rep.commit_operations(ops).await.unwrap();
-
-        rep.rebuild_working_set(true).await.unwrap();
-
-        let ws = rep.working_set().await.unwrap();
-        assert!(ws.by_uuid(uuid).is_some());
-    }
-
-    #[tokio::test]
-    async fn new_pending_adds_to_working_set() {
-        let mut rep = Replica::new(InMemoryStorage::new());
-
-        let uuid = Uuid::new_v4();
-        let mut ops = Operations::new();
-        let mut t = rep.create_task(uuid, &mut ops).await.unwrap();
-        t.set_status(Status::Pending, &mut ops).unwrap();
-        rep.commit_operations(ops).await.unwrap();
-
-        let ws = rep.working_set().await.unwrap();
-        assert_eq!(ws.len(), 1); // only one non-none value
-        assert!(ws.by_index(0).is_none());
-        assert_eq!(ws.by_index(1), Some(uuid));
-
-        let ws = rep.working_set().await.unwrap();
-        assert_eq!(ws.by_uuid(t.get_uuid()), Some(1));
-    }
-
-    #[tokio::test]
-    async fn new_recurring_adds_to_working_set() {
-        let mut rep = Replica::new(InMemoryStorage::new());
-
-        let uuid = Uuid::new_v4();
-        let mut ops = Operations::new();
-        let mut t = rep.create_task(uuid, &mut ops).await.unwrap();
-        t.set_status(Status::Recurring, &mut ops).unwrap();
-        rep.commit_operations(ops).await.unwrap();
-
-        let ws = rep.working_set().await.unwrap();
-        assert_eq!(ws.len(), 1); // only one non-none value
-        assert!(ws.by_index(0).is_none());
-        assert_eq!(ws.by_index(1), Some(uuid));
-
-        let ws = rep.working_set().await.unwrap();
-        assert_eq!(ws.by_uuid(t.get_uuid()), Some(1));
     }
 
     #[tokio::test]

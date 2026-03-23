@@ -33,11 +33,10 @@ MSRV: **1.91.1** (update with `cargo xtask msrv <version>`)
 
 ### Core Abstractions
 
-- **`Replica`** (`src/replica.rs`) — Main entry point. Represents one instance of a user's task data. Wraps a `TaskDb` and provides high-level task CRUD, sync, undo, and working set management.
+- **`Replica`** (`src/replica.rs`) — Main entry point. Represents one instance of a user's task data. Wraps a `TaskDb` and provides high-level task CRUD, sync, and undo.
 - **`TaskDb`** (`src/taskdb/`) — Applies operations to storage, manages sync protocol, snapshots, and undo. Not public API; used internally by `Replica`.
 - **`Operation`/`Operations`** (`src/operation.rs`) — All mutations are expressed as operations that get committed atomically via `Replica::commit_operations(ops)`. Operations are stored for later sync.
 - **`Task`/`TaskData`** (`src/task/`) — `TaskData` is the low-level key-value map wrapper; `Task` is the high-level type with typed property accessors, dependency management, and tag support.
-- **`WorkingSet`** (`src/workingset.rs`) — Maps small 1-based integer IDs to task UUIDs for user-facing short IDs.
 - **`DependencyMap`** (`src/depmap.rs`) — Tracks task dependency relationships.
 
 ### Storage Layer (`src/storage/`)
