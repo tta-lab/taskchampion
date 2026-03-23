@@ -10,7 +10,6 @@ mod operation;
 pub mod plan;
 pub mod position;
 mod replica;
-pub mod server;
 pub mod storage;
 mod task;
 mod taskdb;

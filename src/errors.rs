@@ -5,9 +5,6 @@ use thiserror::Error;
 #[non_exhaustive]
 /// Errors returned from taskchampion operations
 pub enum Error {
-    /// A server-related error
-    #[error("Server Error: {0}")]
-    Server(String),
     /// A task-database-related error
     #[error("Task Database Error: {0}")]
     Database(String),

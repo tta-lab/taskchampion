@@ -6,6 +6,7 @@ use crate::Operations;
 use uuid::Uuid;
 
 mod apply;
+pub(crate) mod op;
 pub(crate) mod undo;
 
 /// A TaskDb is the backend for a replica.  It manages the storage, operations, synchronization,

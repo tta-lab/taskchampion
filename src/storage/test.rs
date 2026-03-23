@@ -319,19 +319,5 @@ pub(super) async fn task_operations(mut storage: impl Storage) -> Result<()> {
         );
     }
 
-    // Sync and verify the task operations still exist.
-    {
-        let mut txn = storage.txn().await?;
-
-        txn.sync_complete().await?;
-
-        let ops = txn.get_task_operations(uuid1).await?;
-        assert_eq!(ops.len(), 2);
-        let ops = txn.get_task_operations(uuid2).await?;
-        assert_eq!(ops.len(), 1);
-        let ops = txn.get_task_operations(uuid3).await?;
-        assert_eq!(ops.len(), 1);
-    }
-
     Ok(())
 }
