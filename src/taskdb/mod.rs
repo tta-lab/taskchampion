@@ -114,7 +114,7 @@ impl<S: Storage> TaskDb<S> {
     #[cfg(test)]
     pub(crate) async fn operations(&mut self) -> Vec<Operation> {
         let mut txn = self.storage.txn().await.unwrap();
-        txn.unsynced_operations().await.unwrap().to_vec()
+        txn.all_operations().await.unwrap().to_vec()
     }
 }
 
