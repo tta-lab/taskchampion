@@ -420,7 +420,6 @@ impl<S: Storage> Replica<S> {
         }
         ops
     }
-
 }
 
 #[cfg(test)]
@@ -578,7 +577,6 @@ mod tests {
                 },
             ]
         );
-
     }
 
     #[tokio::test]
