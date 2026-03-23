@@ -14,13 +14,10 @@ use uuid::Uuid;
 /// Async runtimes like Tokio can move a future between threads to support efficient execution.
 /// This requires the future to also implement `Send`. For most purposes, this is not an issue, but
 /// a few types are `!Send` and any async function handling such types are also `!Send`.
-///
-/// On WASM, the wrapped storage runs in an async task, but not in a thread.
 pub(in crate::storage) struct Wrapper {
     // Both fields in this struct are `Option<..>` to allow them to be dropped individually
     // in `Wrapper::drop`.
     sender: Option<mpsc::UnboundedSender<ActorMessage>>,
-    #[cfg(not(target_arch = "wasm32"))]
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -56,15 +53,7 @@ impl Wrapper {
             }
         };
 
-        // On WASM, we do not have threads, so spawn the constructor in the current thread.
-        #[cfg(target_arch = "wasm32")]
-        {
-            wasm_bindgen_futures::spawn_local(in_thread(init_sender));
-        }
-
-        // Otherwise, spawn a new thread, and within that a local Tokio RT that can handle !Send
-        // futures.
-        #[cfg(not(target_arch = "wasm32"))]
+        // Spawn a new thread, and within that a local Tokio RT that can handle !Send futures.
         let thread = {
             use std::thread;
             use tokio::runtime;
@@ -85,7 +74,6 @@ impl Wrapper {
         init_receiver.await??;
         Ok(Self {
             sender: Some(sender),
-            #[cfg(not(target_arch = "wasm32"))]
             thread: Some(thread),
         })
     }
@@ -107,7 +95,6 @@ impl Storage for Wrapper {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Wrapper {
     fn drop(&mut self) {
         // Deleting the sender signals to the actor thread that it should drop the
