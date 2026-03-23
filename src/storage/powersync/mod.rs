@@ -6,6 +6,10 @@ use std::path::Path;
 use uuid::Uuid;
 
 mod columns;
+#[cfg(feature = "storage-ffi")]
+mod direct;
+#[cfg(feature = "storage-ffi")]
+pub use direct::DirectPowerSyncStorage;
 mod extension;
 mod inner;
 use inner::{PowerSyncStorageInner, SendPtr};

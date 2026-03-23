@@ -23,6 +23,8 @@ pub use position::{append_position, between_position, prepend_position, sequenti
 pub use replica::Replica;
 #[cfg(feature = "storage-powersync")]
 pub use storage::powersync::PowerSyncStorage;
+#[cfg(feature = "storage-ffi")]
+pub use storage::powersync::DirectPowerSyncStorage;
 pub use task::{utc_timestamp, Annotation, Status, Tag, Task, TaskData};
 pub use treemap::TreeMap;
 
