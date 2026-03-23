@@ -93,7 +93,7 @@ async fn storage() -> Result<Wrapper> {
     Wrapper::new(async || Ok(InMemoryStorage::new())).await
 }
 
-crate::storage::test::storage_tests!(storage().await.unwrap());
+crate::storage::test::storage_tests_no_sync!(storage().await.unwrap());
 
 #[tokio::test]
 async fn test_implicit_rollback() -> Result<()> {

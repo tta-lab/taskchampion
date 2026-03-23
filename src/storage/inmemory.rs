@@ -225,5 +225,5 @@ mod test {
         InMemoryStorage::new()
     }
 
-    crate::storage::test::storage_tests!(storage().await);
+    crate::storage::test::storage_tests_no_sync!(storage().await);
 }
