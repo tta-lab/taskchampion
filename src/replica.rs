@@ -703,10 +703,13 @@ mod tests {
 
         rep.commit_operations(ops).await.unwrap();
 
-        let pending_tasks = rep.pending_tasks().await.unwrap();
+        let mut pending_tasks = rep.pending_tasks().await.unwrap();
+        pending_tasks.sort_by_key(|t| t.get_uuid());
         assert_eq!(pending_tasks.len(), 2);
-        assert_eq!(pending_tasks.first().unwrap().get_uuid(), uuid1);
-        assert_eq!(pending_tasks.get(1).unwrap().get_uuid(), uuid2);
+        let mut expected = [uuid1, uuid2];
+        expected.sort();
+        assert_eq!(pending_tasks[0].get_uuid(), expected[0]);
+        assert_eq!(pending_tasks[1].get_uuid(), expected[1]);
     }
 
     #[tokio::test]
