@@ -180,7 +180,6 @@ mod test {
             assert_eq!(txn.all_tasks().await?.len(), 2);
             assert_eq!(txn.base_version().await?, version);
             assert_eq!(txn.unsynced_operations().await?.len(), 0);
-            assert_eq!(txn.get_working_set().await?.len(), 1);
         }
 
         Ok(())

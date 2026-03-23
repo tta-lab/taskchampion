@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-
 use crate::errors::Result;
+#[cfg(test)]
 use crate::operation::Operation;
 use crate::server::Server;
 use crate::storage::{Storage, TaskMap};
@@ -11,7 +10,6 @@ mod apply;
 mod snapshot;
 mod sync;
 pub(crate) mod undo;
-mod working_set;
 
 /// A TaskDb is the backend for a replica.  It manages the storage, operations, synchronization,
 /// and so on, and all the invariants that come with it.  It leaves the meaning of particular task
@@ -30,45 +28,9 @@ impl<S: Storage> TaskDb<S> {
     ///
     /// The operations will be appended to the list of local operations, and the set of tasks will
     /// be updated accordingly.
-    ///
-    /// Any operations for which `add_to_working_set` returns true will cause the relevant
-    /// task to be added to the working set.
-    pub(crate) async fn commit_operations<F>(
-        &mut self,
-        operations: Operations,
-        add_to_working_set: F,
-    ) -> Result<()>
-    where
-        F: Fn(&Operation) -> bool,
-    {
+    pub(crate) async fn commit_operations(&mut self, operations: Operations) -> Result<()> {
         let mut txn = self.storage.txn().await?;
         apply::apply_operations(txn.as_mut(), &operations).await?;
-
-        // Calculate the task(s) to add to the working set.
-        let mut to_add = Vec::new();
-        for operation in &operations {
-            if add_to_working_set(operation) {
-                match operation {
-                    Operation::Create { uuid }
-                    | Operation::Update { uuid, .. }
-                    | Operation::Delete { uuid, .. } => to_add.push(*uuid),
-                    _ => {}
-                }
-            }
-        }
-        let mut working_set: HashSet<Uuid> = txn
-            .get_working_set()
-            .await?
-            .iter()
-            .filter_map(|u| *u)
-            .collect();
-        for uuid in to_add {
-            // Double-check that we are not adding a task to the working-set twice.
-            if !working_set.contains(&uuid) {
-                txn.add_to_working_set(uuid).await?;
-                working_set.insert(uuid);
-            }
-        }
 
         for operation in operations {
             txn.add_operation(operation).await?;
@@ -89,12 +51,6 @@ impl<S: Storage> TaskDb<S> {
         txn.all_task_uuids().await
     }
 
-    /// Get the working set
-    pub(crate) async fn working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        let mut txn = self.storage.txn().await?;
-        txn.get_working_set().await
-    }
-
     /// Get a single task, by uuid.
     pub(crate) async fn get_task(&mut self, uuid: Uuid) -> Result<Option<TaskMap>> {
         let mut txn = self.storage.txn().await?;
@@ -110,21 +66,6 @@ impl<S: Storage> TaskDb<S> {
     pub(crate) async fn get_task_operations(&mut self, uuid: Uuid) -> Result<Operations> {
         let mut txn = self.storage.txn().await?;
         txn.get_task_operations(uuid).await
-    }
-
-    /// Rebuild the working set using a function to identify tasks that should be in the set.  This
-    /// renumbers the existing working-set tasks to eliminate gaps, and also adds any tasks that
-    /// are not already in the working set but should be.  The rebuild occurs in a single
-    /// trasnsaction against the storage backend.
-    pub(crate) async fn rebuild_working_set<F>(
-        &mut self,
-        in_working_set: F,
-        renumber: bool,
-    ) -> Result<()>
-    where
-        F: Fn(&TaskMap) -> bool,
-    {
-        working_set::rebuild(self.storage.txn().await?.as_mut(), in_working_set, renumber).await
     }
 
     /// Sync to the given server, pulling remote changes and pushing local changes.
@@ -243,7 +184,7 @@ mod tests {
             old_value: Some("old".into()),
         });
 
-        db.commit_operations(ops, |_| false).await?;
+        db.commit_operations(ops).await?;
 
         assert_eq!(
             db.sorted_tasks().await,
@@ -266,57 +207,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_operations_update_working_set() -> Result<()> {
-        let mut db = TaskDb::new(InMemoryStorage::new());
-        let mut uuids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        uuids.sort();
-        let [uuid1, uuid2, uuid3] = uuids;
-
-        // uuid1 already exists in the working set.
-        {
-            let mut txn = db.storage.txn().await?;
-            txn.add_to_working_set(uuid1).await?;
-            txn.commit().await?;
-        }
-
-        let mut ops = Operations::new();
-        ops.push(Operation::Create { uuid: uuid1 });
-        ops.push(Operation::Create { uuid: uuid2 });
-        ops.push(Operation::Create { uuid: uuid3 });
-        ops.push(Operation::Create { uuid: uuid2 });
-        ops.push(Operation::Create { uuid: uuid3 });
-
-        // return true for updates to uuid1 or uuid2.
-        let add_to_working_set = |op: &Operation| match op {
-            Operation::Create { uuid } => *uuid == uuid1 || *uuid == uuid2,
-            _ => false,
-        };
-        db.commit_operations(ops, add_to_working_set).await?;
-
-        assert_eq!(
-            db.sorted_tasks().await,
-            vec![(uuid1, vec![]), (uuid2, vec![]), (uuid3, vec![]),]
-        );
-        assert_eq!(
-            db.operations().await,
-            vec![
-                Operation::Create { uuid: uuid1 },
-                Operation::Create { uuid: uuid2 },
-                Operation::Create { uuid: uuid3 },
-                Operation::Create { uuid: uuid2 },
-                Operation::Create { uuid: uuid3 },
-            ]
-        );
-
-        // uuid2 was added to the working set, once, and uuid3 was not.
-        assert_eq!(
-            db.working_set().await?,
-            vec![None, Some(uuid1), Some(uuid2)],
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_num_operations() {
         let mut db = TaskDb::new(InMemoryStorage::new());
         let mut ops = Operations::new();
@@ -327,7 +217,7 @@ mod tests {
         ops.push(Operation::Create {
             uuid: Uuid::new_v4(),
         });
-        db.commit_operations(ops, |_| false).await.unwrap();
+        db.commit_operations(ops).await.unwrap();
         assert_eq!(db.num_operations().await.unwrap(), 2);
     }
 
@@ -336,12 +226,12 @@ mod tests {
         let mut db = TaskDb::new(InMemoryStorage::new());
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
-        db.commit_operations(ops, |_| false).await.unwrap();
+        db.commit_operations(ops).await.unwrap();
         assert_eq!(db.num_undo_points().await.unwrap(), 1);
 
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
-        db.commit_operations(ops, |_| false).await.unwrap();
+        db.commit_operations(ops).await.unwrap();
         assert_eq!(db.num_undo_points().await.unwrap(), 2);
     }
 }

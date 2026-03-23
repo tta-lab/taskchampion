@@ -75,7 +75,7 @@ pub trait StorageTxn: Send {
     /// Get an (immutable) task, if it is in the storage
     async fn get_task(&mut self, uuid: Uuid) -> Result<Option<TaskMap>>;
 
-    /// Get a vector of all pending tasks from the working_set
+    /// Get a vector of all tasks with status "pending"
     async fn get_pending_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>>;
 
     /// Create an (empty) task, only if it does not already exist.  Returns true if
@@ -126,28 +126,11 @@ pub trait StorageTxn: Send {
     /// may perform additional cleanup at this time.
     async fn sync_complete(&mut self) -> Result<()>;
 
-    /// Get the entire working set, with each task UUID at its appropriate (1-based) index.
-    /// Element 0 is always None.
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>>;
-
-    /// Add a task to the working set and return its (one-based) index.  This index will be one greater
-    /// than the highest used index.
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize>;
-
-    /// Update the working set task at the given index.  This cannot add a new item to the
-    /// working set.
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()>;
-
-    /// Clear all tasks from the working set in preparation for a renumbering operation.
-    /// Note that this is the only way items are removed from the set.
-    async fn clear_working_set(&mut self) -> Result<()>;
-
     /// Check whether this storage is entirely empty
     #[allow(clippy::wrong_self_convention)] // mut is required here for storage access
     async fn is_empty(&mut self) -> Result<bool> {
         let mut empty = true;
         empty = empty && self.all_tasks().await?.is_empty();
-        empty = empty && self.get_working_set().await? == vec![None];
         empty = empty && self.base_version().await? == Uuid::nil();
         empty = empty && self.unsynced_operations().await?.is_empty();
         Ok(empty)

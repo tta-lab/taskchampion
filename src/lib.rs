@@ -16,7 +16,6 @@ mod task;
 mod taskdb;
 mod treemap;
 mod utils;
-mod workingset;
 
 pub use depmap::DependencyMap;
 pub use errors::Error;
@@ -32,7 +31,6 @@ pub use storage::powersync::PowerSyncStorage;
 pub use storage::sqlite::SqliteStorage;
 pub use task::{utc_timestamp, Annotation, Status, Tag, Task, TaskData};
 pub use treemap::TreeMap;
-pub use workingset::WorkingSet;
 
 /// Re-exported type from the `uuid` crate, for ease of compatibility for consumers of this crate.
 pub use uuid::Uuid;

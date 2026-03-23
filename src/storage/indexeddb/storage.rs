@@ -18,12 +18,7 @@ struct Inner {
 impl WrappedStorage for Inner {
     async fn txn<'a>(&'a mut self) -> Result<Box<dyn WrappedStorageTxn + 'a>> {
         Ok(Box::new(InnerTxn(Some(self.db.transaction(
-            &[
-                schema::TASKS,
-                schema::OPERATIONS,
-                schema::SYNC_META,
-                schema::WORKING_SET,
-            ],
+            &[schema::TASKS, schema::OPERATIONS, schema::SYNC_META],
             TransactionMode::ReadWrite,
         )?))))
     }
@@ -122,20 +117,6 @@ impl InnerTxn {
             Err(already_committed())
         }
     }
-
-    async fn get_next_working_set_number(&self) -> Result<usize> {
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        let mut max: usize = 0;
-        let mut maybe_cursor = working_set.open_key_cursor(None, None)?.await?;
-        while let Some(cursor) = maybe_cursor {
-            let i = cursor.key()?.as_f64().ok_or_else(invalid)? as usize;
-            if i > max {
-                max = i;
-            }
-            maybe_cursor = cursor.next(None)?.await?;
-        }
-        Ok(max + 1)
-    }
 }
 
 #[async_trait(?Send)]
@@ -151,16 +132,13 @@ impl WrappedStorageTxn for InnerTxn {
 
     async fn get_pending_tasks(&mut self) -> Result<Vec<(Uuid, TaskMap)>> {
         let tasks = self.idb_txn()?.object_store(schema::TASKS)?;
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        let mut maybe_cursor = working_set
-            .open_cursor(None, Some(CursorDirection::Prev))?
-            .await?;
         let mut res = Vec::new();
+        let mut maybe_cursor = tasks.open_cursor(None, None)?.await?;
         while let Some(cursor) = maybe_cursor {
-            let jsuuid = cursor.value()?;
-            let uuid = js2uuid(jsuuid.clone())?;
-            if let Some(task) = tasks.get(Query::Key(jsuuid))?.await? {
-                res.push((uuid, js2task(task)?));
+            let uuid = js2uuid(cursor.key()?)?;
+            let task = js2task(cursor.value()?)?;
+            if task.get("status").map(|s| s == "pending").unwrap_or(false) {
+                res.push((uuid, task));
             }
             maybe_cursor = cursor.next(None)?.await?;
         }
@@ -341,47 +319,6 @@ impl WrappedStorageTxn for InnerTxn {
             maybe_cursor = cursor.next(None)?.await?;
         }
 
-        Ok(())
-    }
-
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        let mut res = vec![None];
-        let mut maybe_cursor = working_set
-            .open_cursor(None, Some(CursorDirection::Prev))?
-            .await?;
-        while let Some(cursor) = maybe_cursor {
-            let id = cursor.key()?.as_f64().ok_or_else(invalid)? as usize;
-            let uuid = js2uuid(cursor.value()?)?;
-            res.resize_with(res.len().max(id + 1), Default::default);
-            res[id] = Some(uuid);
-            maybe_cursor = cursor.next(None)?.await?;
-        }
-        Ok(res)
-    }
-
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        let next_working_set_id = self.get_next_working_set_number().await?;
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        working_set
-            .add(&uuid2js(uuid)?, Some(&next_working_set_id.into()))?
-            .await?;
-        Ok(next_working_set_id)
-    }
-
-    async fn set_working_set_item(&mut self, id: usize, uuid: Option<Uuid>) -> Result<()> {
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        if let Some(uuid) = uuid {
-            working_set.put(&uuid2js(uuid)?, Some(&id.into()))?.await?;
-        } else {
-            working_set.delete(Query::Key(id.into()))?.await?;
-        }
-        Ok(())
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
-        let working_set = self.idb_txn()?.object_store(schema::WORKING_SET)?;
-        working_set.clear()?.await?;
         Ok(())
     }
 

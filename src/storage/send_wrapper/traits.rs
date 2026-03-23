@@ -22,15 +22,10 @@ pub(in crate::storage) trait WrappedStorageTxn {
     async fn add_operation(&mut self, op: Operation) -> Result<()>;
     async fn remove_operation(&mut self, op: Operation) -> Result<()>;
     async fn sync_complete(&mut self) -> Result<()>;
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>>;
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize>;
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()>;
-    async fn clear_working_set(&mut self) -> Result<()>;
     #[allow(clippy::wrong_self_convention)] // mut is required here for storage access
     async fn is_empty(&mut self) -> Result<bool> {
         let mut empty = true;
         empty = empty && self.all_tasks().await?.is_empty();
-        empty = empty && self.get_working_set().await? == vec![None];
         empty = empty && self.base_version().await? == Uuid::nil();
         empty = empty && self.unsynced_operations().await?.is_empty();
         Ok(empty)

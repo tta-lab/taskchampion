@@ -13,21 +13,6 @@ use uuid::Uuid;
 macro_rules! storage_tests_base {
     ($storage:expr, $macro:meta) => {
         #[$macro]
-        async fn get_working_set_empty() -> $crate::errors::Result<()> {
-            $crate::storage::test::get_working_set_empty($storage).await
-        }
-
-        #[$macro]
-        async fn add_to_working_set() -> $crate::errors::Result<()> {
-            $crate::storage::test::add_to_working_set($storage).await
-        }
-
-        #[$macro]
-        async fn clear_working_set() -> $crate::errors::Result<()> {
-            $crate::storage::test::clear_working_set($storage).await
-        }
-
-        #[$macro]
         async fn drop_transaction() -> $crate::errors::Result<()> {
             $crate::storage::test::drop_transaction($storage).await
         }
@@ -111,11 +96,6 @@ macro_rules! storage_tests_base {
         async fn sync_complete() -> Result<()> {
             $crate::storage::test::sync_complete($storage).await
         }
-
-        #[$macro]
-        async fn set_working_set_item() -> Result<()> {
-            $crate::storage::test::set_working_set_item($storage).await
-        }
     };
 }
 pub(crate) use storage_tests_base;
@@ -129,9 +109,8 @@ macro_rules! storage_tests {
 }
 pub(crate) use storage_tests;
 
-/// Subset of storage tests for backends that don't use TC's sync protocol or
-/// working-set numbering (e.g. PowerSync, where an external daemon handles sync
-/// and working-set numbers are not meaningful).
+/// Subset of storage tests for backends that don't use TC's sync protocol
+/// (e.g. PowerSync, where an external daemon handles sync).
 macro_rules! storage_tests_no_sync {
     ($storage:expr) => {
         #[tokio::test]
@@ -197,64 +176,6 @@ macro_rules! storage_tests_wasm {
 }
 #[cfg(target_arch = "wasm32")]
 pub(crate) use storage_tests_wasm;
-
-pub(super) async fn get_working_set_empty(mut storage: impl Storage) -> Result<()> {
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None]);
-    }
-
-    Ok(())
-}
-
-pub(super) async fn add_to_working_set(mut storage: impl Storage) -> Result<()> {
-    let uuid1 = Uuid::new_v4();
-    let uuid2 = Uuid::new_v4();
-
-    {
-        let mut txn = storage.txn().await?;
-        txn.add_to_working_set(uuid1).await?;
-        txn.add_to_working_set(uuid2).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None, Some(uuid1), Some(uuid2)]);
-    }
-
-    Ok(())
-}
-
-pub(super) async fn clear_working_set(mut storage: impl Storage) -> Result<()> {
-    let uuid1 = Uuid::new_v4();
-    let uuid2 = Uuid::new_v4();
-
-    {
-        let mut txn = storage.txn().await?;
-        txn.add_to_working_set(uuid1).await?;
-        txn.add_to_working_set(uuid2).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        txn.clear_working_set().await?;
-        txn.add_to_working_set(uuid2).await?;
-        txn.add_to_working_set(uuid1).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None, Some(uuid2), Some(uuid1)]);
-    }
-
-    Ok(())
-}
 
 pub(super) async fn drop_transaction(mut storage: impl Storage) -> Result<()> {
     let uuid1 = Uuid::new_v4();
@@ -440,22 +361,25 @@ pub(super) async fn pending_tasks(mut storage: impl Storage) -> Result<()> {
     let uuids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
     {
         let mut txn = storage.txn().await?;
-        for (i, uuid) in uuids.iter().enumerate() {
-            assert!(txn.create_task(*uuid).await?);
+        // uuids[0] is not pending (no status field).
+        assert!(txn.create_task(uuids[0]).await?);
+        txn.set_task(
+            uuids[0],
+            taskmap_with(vec![("num".to_string(), "0".to_string())]),
+        )
+        .await?;
+        // uuids[1] and uuids[2] are pending.
+        for i in [1usize, 2] {
+            assert!(txn.create_task(uuids[i]).await?);
             txn.set_task(
-                *uuid,
-                taskmap_with(vec![("num".to_string(), i.to_string())]),
+                uuids[i],
+                taskmap_with(vec![
+                    ("num".to_string(), i.to_string()),
+                    ("status".to_string(), "pending".to_string()),
+                ]),
             )
             .await?;
         }
-
-        // Put only uuids[1] and [2] and a UUID with no matching task in the working set.
-        txn.add_to_working_set(uuids[0]).await?;
-        txn.add_to_working_set(uuids[1]).await?;
-        txn.add_to_working_set(uuids[2]).await?;
-        txn.add_to_working_set(Uuid::new_v4()).await?;
-        txn.set_working_set_item(1, None).await?;
-
         txn.commit().await?;
     }
     {
@@ -468,11 +392,17 @@ pub(super) async fn pending_tasks(mut storage: impl Storage) -> Result<()> {
         let mut exp = vec![
             (
                 uuids[1],
-                taskmap_with(vec![("num".to_string(), "1".to_string())]),
+                taskmap_with(vec![
+                    ("num".to_string(), "1".to_string()),
+                    ("status".to_string(), "pending".to_string()),
+                ]),
             ),
             (
                 uuids[2],
-                taskmap_with(vec![("num".to_string(), "2".to_string())]),
+                taskmap_with(vec![
+                    ("num".to_string(), "2".to_string()),
+                    ("status".to_string(), "pending".to_string()),
+                ]),
             ),
         ];
         exp.sort_by(|a, b| a.0.cmp(&b.0));
@@ -808,67 +738,6 @@ pub(super) async fn sync_complete(mut storage: impl Storage) -> Result<()> {
         assert_eq!(ops.len(), 1);
         let ops = txn.get_task_operations(uuid2).await?;
         assert_eq!(ops.len(), 0);
-    }
-
-    Ok(())
-}
-
-pub(super) async fn set_working_set_item(mut storage: impl Storage) -> Result<()> {
-    let uuid1 = Uuid::new_v4();
-    let uuid2 = Uuid::new_v4();
-
-    {
-        let mut txn = storage.txn().await?;
-        txn.add_to_working_set(uuid1).await?;
-        txn.add_to_working_set(uuid2).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None, Some(uuid1), Some(uuid2)]);
-    }
-
-    // Clear one item
-    {
-        let mut txn = storage.txn().await?;
-        txn.set_working_set_item(1, None).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None, None, Some(uuid2)]);
-    }
-
-    // Override item
-    {
-        let mut txn = storage.txn().await?;
-        txn.set_working_set_item(2, Some(uuid1)).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        assert_eq!(ws, vec![None, None, Some(uuid1)]);
-    }
-
-    // Set the last item to None
-    {
-        let mut txn = storage.txn().await?;
-        txn.set_working_set_item(1, Some(uuid1)).await?;
-        txn.set_working_set_item(2, None).await?;
-        txn.commit().await?;
-    }
-
-    {
-        let mut txn = storage.txn().await?;
-        let ws = txn.get_working_set().await?;
-        // Note no trailing `None`.
-        assert_eq!(ws, vec![None, Some(uuid1)]);
     }
 
     Ok(())

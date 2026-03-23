@@ -26,6 +26,7 @@ type UpgradeFn = fn(&Transaction) -> Result<()>;
 const VERSIONS: &[(DbVersion, UpgradeFn)] = &[
     (DbVersion(0, 1), upgrade_to_0_1),
     (DbVersion(0, 2), upgrade_to_0_2),
+    (DbVersion(0, 3), upgrade_to_0_3),
 ];
 pub(super) const LATEST_VERSION: DbVersion = VERSIONS[VERSIONS.len() - 1].0;
 
@@ -60,7 +61,6 @@ fn upgrade_to_0_1(t: &Transaction) -> Result<()> {
             "CREATE TABLE IF NOT EXISTS operations (id INTEGER PRIMARY KEY AUTOINCREMENT, data STRING);",
             "CREATE TABLE IF NOT EXISTS sync_meta (key STRING PRIMARY KEY, value STRING);",
             "CREATE TABLE IF NOT EXISTS tasks (uuid STRING PRIMARY KEY, data STRING);",
-            "CREATE TABLE IF NOT EXISTS working_set (id INTEGER PRIMARY KEY, uuid STRING);",
         ];
     for q in create_tables {
         t.execute(q, []).context("Creating table")?;
@@ -131,6 +131,16 @@ fn upgrade_to_0_2(t: &Transaction) -> Result<()> {
 
     set_db_version(t, DbVersion(0, 2))?;
 
+    Ok(())
+}
+
+/// Update to DbVersion(0, 3).
+///
+/// Drops the `working_set` table, which is no longer used.
+fn upgrade_to_0_3(t: &Transaction) -> Result<()> {
+    t.execute("DROP TABLE IF EXISTS working_set", [])
+        .context("Dropping working_set table")?;
+    set_db_version(t, DbVersion(0, 3))?;
     Ok(())
 }
 
@@ -258,8 +268,6 @@ mod test {
             assert!(has_column(&t, "sync_meta", "value")?);
             assert!(has_column(&t, "tasks", "uuid")?);
             assert!(has_column(&t, "tasks", "data")?);
-            assert!(has_column(&t, "working_set", "id")?);
-            assert!(has_column(&t, "working_set", "uuid")?);
         }
         assert_eq!(get_db_version(&mut con)?, DbVersion(0, 1));
         Ok(())
@@ -283,8 +291,6 @@ mod test {
             assert!(has_column(&t, "sync_meta", "value")?);
             assert!(has_column(&t, "tasks", "uuid")?);
             assert!(has_column(&t, "tasks", "data")?);
-            assert!(has_column(&t, "working_set", "id")?);
-            assert!(has_column(&t, "working_set", "uuid")?);
         }
         assert_eq!(get_db_version(&mut con)?, DbVersion(0, 2));
         Ok(())

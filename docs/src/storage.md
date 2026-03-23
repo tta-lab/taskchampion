@@ -9,7 +9,6 @@ The storage contains the following information:
 - `tasks`: a set of tasks, indexed by UUID
 - `base_version`: the number of the last version sync'd from the server (a single integer)
 - `operations`: all operations performed since base_version
-- `working_set`: a mapping from integer -> UUID, used to keep stable small-integer indexes into the tasks for users' convenience.  This data is not synchronized with the server and does not affect any consistency guarantees.
 
 ## Tasks
 

@@ -72,22 +72,6 @@ impl WrappedStorageTxn for Box<dyn StorageTxn + Send + '_> {
         self.as_mut().sync_complete().await
     }
 
-    async fn get_working_set(&mut self) -> Result<Vec<Option<Uuid>>> {
-        self.as_mut().get_working_set().await
-    }
-
-    async fn add_to_working_set(&mut self, uuid: Uuid) -> Result<usize> {
-        self.as_mut().add_to_working_set(uuid).await
-    }
-
-    async fn set_working_set_item(&mut self, index: usize, uuid: Option<Uuid>) -> Result<()> {
-        self.as_mut().set_working_set_item(index, uuid).await
-    }
-
-    async fn clear_working_set(&mut self) -> Result<()> {
-        self.as_mut().clear_working_set().await
-    }
-
     #[allow(clippy::wrong_self_convention)] // mut is required here for storage access
     async fn is_empty(&mut self) -> Result<bool> {
         self.as_mut().is_empty().await
