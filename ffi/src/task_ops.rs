@@ -65,8 +65,8 @@ fn apply_mutation(
             task.set_priority(value, ops).map_err(FfiError::from)?;
         }
         TaskMutation::SetDue { epoch } => {
-            // `Timestamp` is pub(crate) in taskchampion — use `set_value` with
-            // an epoch string to bypass the private type alias.
+            // FFI receives i64 epoch; set_timestamp expects DateTime<Utc>. Both
+            // paths store identical epoch-second strings in the task map.
             let value = epoch.map(|e| e.to_string());
             task.set_value("due", value, ops).map_err(FfiError::from)?;
         }

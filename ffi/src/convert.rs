@@ -1,9 +1,9 @@
 //! Conversions between taskchampion types and FFI-friendly types.
 
-use taskchampion::{DependencyMap, Status, Task, TreeMap};
+use taskchampion::{Status, Task, TreeMap};
 use uuid::Uuid;
 
-use crate::types::{FfiAnnotation, FfiDependencyEdge, FfiError, FfiStatus, FfiTask, FfiTreeNode};
+use crate::types::{FfiAnnotation, FfiError, FfiStatus, FfiTask, FfiTreeNode};
 
 // ---------------------------------------------------------------------------
 // Task → FfiTask
@@ -120,16 +120,4 @@ fn collect_tree(tm: &TreeMap, parent: Option<Uuid>, uuids: &[Uuid], nodes: &mut 
         });
         collect_tree(tm, Some(uuid), &children, nodes);
     }
-}
-
-// ---------------------------------------------------------------------------
-// DependencyMap → Vec<FfiDependencyEdge>
-//
-// NOTE: DependencyMap does not expose all task UUIDs, so this function is a
-// placeholder. The actual edge enumeration is performed at the call site in
-// `replica_ops.rs` where the full UUID list is available.
-// ---------------------------------------------------------------------------
-
-pub fn depmap_to_ffi(_dm: &DependencyMap) -> Vec<FfiDependencyEdge> {
-    Vec::new()
 }

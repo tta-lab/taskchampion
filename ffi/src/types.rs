@@ -49,6 +49,9 @@ pub struct FfiTreeNode {
     /// Direct child UUIDs.
     pub children: Vec<String>,
     pub parent: Option<String>,
+    /// Always `None` when returned from `tree_map()` — position lives on the
+    /// `Task`, not on the `TreeMap`. Cross-reference with `all_tasks()` to
+    /// obtain per-node position values.
     pub position: Option<String>,
     /// `true` if the node has at least one pending child.
     pub is_pending: bool,

@@ -247,3 +247,42 @@ fn test_handle_not_closed_on_drop() {
         "task written via FFI should be visible to original conn"
     );
 }
+
+#[test]
+fn test_set_due_round_trip() {
+    // Guards the set_value("due", epoch_string) workaround — verifies that a
+    // due date written via SetDue is read back as the same epoch value.
+    let conn = make_conn();
+    let handle = handle_i64(&conn);
+    let uuid = Uuid::new_v4().to_string();
+    let epoch: i64 = 1_700_000_000; // 2023-11-14 ~ fixed value for determinism
+
+    create_task(handle, USER_ID.into(), uuid.clone(), "Due test".into()).expect("create");
+
+    mutate_task(
+        handle,
+        USER_ID.into(),
+        uuid.clone(),
+        vec![TaskMutation::SetDue { epoch: Some(epoch) }],
+    )
+    .expect("set due");
+
+    let task = get_task(handle, USER_ID.into(), uuid.clone())
+        .expect("get")
+        .expect("exists");
+    assert_eq!(task.due, Some(epoch), "due round-trip via set_value");
+
+    // Clear the due date
+    mutate_task(
+        handle,
+        USER_ID.into(),
+        uuid.clone(),
+        vec![TaskMutation::SetDue { epoch: None }],
+    )
+    .expect("clear due");
+
+    let cleared = get_task(handle, USER_ID.into(), uuid)
+        .expect("get after clear")
+        .expect("exists after clear");
+    assert_eq!(cleared.due, None, "due should be None after clearing");
+}
