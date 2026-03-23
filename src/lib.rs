@@ -21,6 +21,8 @@ pub use errors::Error;
 pub use operation::{Operation, Operations};
 pub use position::{append_position, between_position, prepend_position, sequential_positions};
 pub use replica::Replica;
+#[cfg(feature = "storage-ffi")]
+pub use storage::powersync::DirectPowerSyncStorage;
 #[cfg(feature = "storage-powersync")]
 pub use storage::powersync::PowerSyncStorage;
 pub use task::{utc_timestamp, Annotation, Status, Tag, Task, TaskData};

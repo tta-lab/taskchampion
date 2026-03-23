@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.91.1"
 
 [workspace]
-members = [ "xtask" ]
+members = [ "xtask", "ffi" ]
 resolver = "2"
 
 [lib]
@@ -25,6 +25,8 @@ default = ["storage-powersync", "bundled"]
 
 # Support for PowerSync task storage
 storage-powersync = ["dep:rusqlite", "dep:powersync_core", "rusqlite/bundled"]
+# FFI-optimised direct storage path (bypasses Wrapper actor thread, single-threaded only)
+storage-ffi = ["storage-powersync"]
 # Expose *_for_test() constructors for use in external crate tests
 test-utils = ["storage-powersync"]
 # static bundling of dependencies

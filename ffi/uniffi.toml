@@ -1,0 +1,5 @@
+[bindings.swift]
+module_name = "TaskChampionFFI"
+
+[bindings.kotlin]
+package_name = "com.guion.taskchampion"
