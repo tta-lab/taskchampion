@@ -73,10 +73,7 @@ impl DirectPowerSyncStorage {
     ///   handle on drop.
     /// - The handle must remain valid for the entire lifetime of this storage.
     /// - Must only be used with a single-threaded async runtime.
-    pub unsafe fn from_handle(
-        handle: *mut rusqlite::ffi::sqlite3,
-        user_id: Uuid,
-    ) -> Result<Self> {
+    pub unsafe fn from_handle(handle: *mut rusqlite::ffi::sqlite3, user_id: Uuid) -> Result<Self> {
         let inner = PowerSyncStorageInner::from_handle(SendPtr(handle), user_id)?;
         Ok(Self(inner))
     }

@@ -40,8 +40,9 @@ where
     Fut: std::future::Future<Output = Result<T, FfiError>>,
 {
     RUNTIME.block_on(async {
-        let user_uuid = Uuid::parse_str(user_id)
-            .map_err(|e| FfiError::Usage { message: format!("Invalid user_id: {e}") })?;
+        let user_uuid = Uuid::parse_str(user_id).map_err(|e| FfiError::Usage {
+            message: format!("Invalid user_id: {e}"),
+        })?;
         let ptr = db_handle as *mut rusqlite::ffi::sqlite3;
         // SAFETY: FFI caller guarantees a valid, open handle; RUNTIME is current_thread
         // so the !Send connection is never accessed from multiple threads.
@@ -53,7 +54,9 @@ where
 }
 
 pub(crate) fn parse_uuid(s: &str) -> Result<Uuid, FfiError> {
-    Uuid::parse_str(s).map_err(|e| FfiError::Usage { message: format!("Invalid UUID: {e}") })
+    Uuid::parse_str(s).map_err(|e| FfiError::Usage {
+        message: format!("Invalid UUID: {e}"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -103,13 +106,13 @@ pub fn tree_map(db_handle: i64, user_id: String) -> Result<Vec<FfiTreeNode>, Ffi
 
 /// Return all dependency edges as `(from_uuid depends_on to_uuid)` pairs.
 #[uniffi::export]
-pub fn dependency_map(
-    db_handle: i64,
-    user_id: String,
-) -> Result<Vec<FfiDependencyEdge>, FfiError> {
+pub fn dependency_map(db_handle: i64, user_id: String) -> Result<Vec<FfiDependencyEdge>, FfiError> {
     with_replica(db_handle, &user_id, |mut replica| async move {
         let uuids = replica.all_task_uuids().await.map_err(FfiError::from)?;
-        let dm = replica.dependency_map(false).await.map_err(FfiError::from)?;
+        let dm = replica
+            .dependency_map(false)
+            .await
+            .map_err(FfiError::from)?;
         let mut edges = Vec::new();
         for uuid in &uuids {
             for dep in dm.dependencies(*uuid) {
@@ -147,7 +150,10 @@ pub fn create_task(
             .map_err(FfiError::from)?;
         task.set_entry(Some(Utc::now()), &mut ops)
             .map_err(FfiError::from)?;
-        replica.commit_operations(ops).await.map_err(FfiError::from)?;
+        replica
+            .commit_operations(ops)
+            .await
+            .map_err(FfiError::from)?;
         // Re-fetch to get the dependency-map-aware Task
         let created = replica
             .get_task(task_uuid)

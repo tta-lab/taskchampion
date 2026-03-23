@@ -107,12 +107,7 @@ pub fn tree_map_to_ffi(tm: &TreeMap) -> Vec<FfiTreeNode> {
     nodes
 }
 
-fn collect_tree(
-    tm: &TreeMap,
-    parent: Option<Uuid>,
-    uuids: &[Uuid],
-    nodes: &mut Vec<FfiTreeNode>,
-) {
+fn collect_tree(tm: &TreeMap, parent: Option<Uuid>, uuids: &[Uuid], nodes: &mut Vec<FfiTreeNode>) {
     for &uuid in uuids {
         let children = tm.children(uuid);
         let has_pending_children = !tm.pending_child_ids(uuid).is_empty();

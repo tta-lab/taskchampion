@@ -43,10 +43,7 @@ pub fn mutate_task(
             .map_err(FfiError::from)?;
 
         // Re-fetch — may be `None` if the task was hard-deleted (defensive).
-        let updated = replica
-            .get_task(task_uuid)
-            .await
-            .map_err(FfiError::from)?;
+        let updated = replica.get_task(task_uuid).await.map_err(FfiError::from)?;
         Ok(updated.as_ref().map(FfiTask::from))
     })
 }
@@ -75,8 +72,7 @@ fn apply_mutation(
         }
         TaskMutation::SetWait { epoch } => {
             let value = epoch.map(|e| e.to_string());
-            task.set_value("wait", value, ops)
-                .map_err(FfiError::from)?;
+            task.set_value("wait", value, ops).map_err(FfiError::from)?;
         }
         TaskMutation::SetEntry { epoch } => {
             let value = epoch.map(|e| e.to_string());
@@ -91,17 +87,15 @@ fn apply_mutation(
             task.set_position(value, ops).map_err(FfiError::from)?;
         }
         TaskMutation::AddTag { tag } => {
-            let tag: Tag = tag
-                .as_str()
-                .try_into()
-                .map_err(|e| FfiError::Usage { message: format!("Invalid tag: {e}") })?;
+            let tag: Tag = tag.as_str().try_into().map_err(|e| FfiError::Usage {
+                message: format!("Invalid tag: {e}"),
+            })?;
             task.add_tag(&tag, ops).map_err(FfiError::from)?;
         }
         TaskMutation::RemoveTag { tag } => {
-            let tag: Tag = tag
-                .as_str()
-                .try_into()
-                .map_err(|e| FfiError::Usage { message: format!("Invalid tag: {e}") })?;
+            let tag: Tag = tag.as_str().try_into().map_err(|e| FfiError::Usage {
+                message: format!("Invalid tag: {e}"),
+            })?;
             task.remove_tag(&tag, ops).map_err(FfiError::from)?;
         }
         TaskMutation::AddAnnotation { entry, description } => {
@@ -114,10 +108,9 @@ fn apply_mutation(
             task.add_annotation(ann, ops).map_err(FfiError::from)?;
         }
         TaskMutation::RemoveAnnotation { entry } => {
-            let ts =
-                DateTime::from_timestamp(entry, 0).ok_or_else(|| FfiError::Usage {
-                    message: format!("Invalid epoch: {entry}"),
-                })?;
+            let ts = DateTime::from_timestamp(entry, 0).ok_or_else(|| FfiError::Usage {
+                message: format!("Invalid epoch: {entry}"),
+            })?;
             task.remove_annotation(ts, ops).map_err(FfiError::from)?;
         }
         TaskMutation::AddDependency { uuid } => {

@@ -69,21 +69,50 @@ pub struct FfiDependencyEdge {
 /// a single transaction with one undo point.
 #[derive(uniffi::Enum)]
 pub enum TaskMutation {
-    SetDescription { value: String },
-    SetStatus { status: FfiStatus },
-    SetPriority { value: String },
+    SetDescription {
+        value: String,
+    },
+    SetStatus {
+        status: FfiStatus,
+    },
+    SetPriority {
+        value: String,
+    },
     /// `None` clears the field.
-    SetDue { epoch: Option<i64> },
-    SetWait { epoch: Option<i64> },
-    SetEntry { epoch: Option<i64> },
-    SetParent { uuid: Option<String> },
-    SetPosition { value: Option<String> },
-    AddTag { tag: String },
-    RemoveTag { tag: String },
-    AddAnnotation { entry: i64, description: String },
-    RemoveAnnotation { entry: i64 },
-    AddDependency { uuid: String },
-    RemoveDependency { uuid: String },
+    SetDue {
+        epoch: Option<i64>,
+    },
+    SetWait {
+        epoch: Option<i64>,
+    },
+    SetEntry {
+        epoch: Option<i64>,
+    },
+    SetParent {
+        uuid: Option<String>,
+    },
+    SetPosition {
+        value: Option<String>,
+    },
+    AddTag {
+        tag: String,
+    },
+    RemoveTag {
+        tag: String,
+    },
+    AddAnnotation {
+        entry: i64,
+        description: String,
+    },
+    RemoveAnnotation {
+        entry: i64,
+    },
+    AddDependency {
+        uuid: String,
+    },
+    RemoveDependency {
+        uuid: String,
+    },
     /// Mark the task as completed.
     Done,
     /// Start tracking active time.

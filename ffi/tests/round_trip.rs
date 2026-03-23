@@ -78,8 +78,8 @@ fn test_create_and_read() {
     let uuid = Uuid::new_v4().to_string();
 
     // Create
-    let task = create_task(handle, USER_ID.into(), uuid.clone(), "Hello FFI".into())
-        .expect("create_task");
+    let task =
+        create_task(handle, USER_ID.into(), uuid.clone(), "Hello FFI".into()).expect("create_task");
     assert_eq!(task.description, "Hello FFI");
     assert!(matches!(task.status, FfiStatus::Pending));
 
@@ -103,7 +103,9 @@ fn test_mutate_description() {
         handle,
         USER_ID.into(),
         uuid.clone(),
-        vec![TaskMutation::SetDescription { value: "Updated".into() }],
+        vec![TaskMutation::SetDescription {
+            value: "Updated".into(),
+        }],
     )
     .expect("mutate")
     .expect("task still exists");
@@ -144,7 +146,10 @@ fn test_all_tasks_includes_completed() {
     .expect("done");
 
     let all = all_tasks(handle, USER_ID.into()).expect("all_tasks");
-    let task = all.iter().find(|t| t.uuid == uuid).expect("task in all_tasks");
+    let task = all
+        .iter()
+        .find(|t| t.uuid == uuid)
+        .expect("task in all_tasks");
     assert!(matches!(task.status, FfiStatus::Completed));
 }
 
@@ -163,7 +168,9 @@ fn test_undo_api_not_error() {
         handle,
         USER_ID.into(),
         uuid.clone(),
-        vec![TaskMutation::SetDescription { value: "Changed".into() }],
+        vec![TaskMutation::SetDescription {
+            value: "Changed".into(),
+        }],
     )
     .expect("mutate");
 
@@ -217,7 +224,13 @@ fn test_handle_not_closed_on_drop() {
     let uuid = Uuid::new_v4().to_string();
 
     // FFI call creates + drops DirectPowerSyncStorage internally
-    create_task(handle, USER_ID.into(), uuid.clone(), "Ownership test".into()).expect("create");
+    create_task(
+        handle,
+        USER_ID.into(),
+        uuid.clone(),
+        "Ownership test".into(),
+    )
+    .expect("create");
 
     // Original connection still works after FFI storage was dropped
     let still_works: i64 = conn.query_row("SELECT 1", [], |r| r.get(0)).unwrap();
@@ -225,11 +238,12 @@ fn test_handle_not_closed_on_drop() {
 
     // Data written via FFI is visible through the original connection
     let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM tc_tasks WHERE id = ?",
-            [&uuid],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM tc_tasks WHERE id = ?", [&uuid], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert_eq!(count, 1, "task written via FFI should be visible to original conn");
+    assert_eq!(
+        count, 1,
+        "task written via FFI should be visible to original conn"
+    );
 }
