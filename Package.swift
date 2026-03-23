@@ -20,7 +20,8 @@ let package = Package(
             dependencies: ["TaskChampionFFIFFI"],
             path: "Sources/TaskChampionFFI"
         ),
-        // Pre-built static library + C headers (produced by scripts/build_xcframework.sh)
+        // Pre-built static library + C headers.
+        // Run scripts/build_xcframework.sh to generate TaskChampionFFIFFI.xcframework.
         .binaryTarget(
             name: "TaskChampionFFIFFI",
             path: "TaskChampionFFIFFI.xcframework"

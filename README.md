@@ -32,7 +32,7 @@ The `ffi/` crate provides a UniFFI-based FFI layer for iOS consumption via SPM.
 ```
 
 This produces:
-- `taskchampion_ffiFFI.xcframework/` — static library for iOS device + simulator
+- `TaskChampionFFIFFI.xcframework/` — static library for iOS device + simulator
 - `Sources/TaskChampionFFI/TaskChampionFFI.swift` — generated Swift bindings
 
 ### Consuming from an iOS Project

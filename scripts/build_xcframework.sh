@@ -66,10 +66,10 @@ done
 # --- Generate Swift bindings ---
 
 echo "==> Generating Swift bindings..."
-# Build host library for binding generation — uniffi-bindgen only reads UniFFI
-# metadata from the library, so architecture doesn't matter and debug mode is
-# fine. We intentionally don't add --release here to avoid rebuilding the host
-# target in release when only the cross-compiled targets need it.
+# Build host library for binding generation — uniffi-bindgen reads UniFFI
+# metadata embedded in the compiled library. We use --release so the output
+# lands in target/release/ alongside the cross-compiled targets, keeping the
+# HOST_LIB path simple. Architecture doesn't matter for metadata extraction.
 cargo build -p taskchampion-ffi --lib --release --manifest-path "${PROJECT_ROOT}/Cargo.toml"
 
 HOST_LIB="${PROJECT_ROOT}/target/release/libtaskchampion_ffi.a"
