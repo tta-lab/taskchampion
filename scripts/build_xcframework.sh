@@ -74,8 +74,8 @@ cargo build -p taskchampion-ffi --lib --release --manifest-path "${PROJECT_ROOT}
 
 HOST_LIB="${PROJECT_ROOT}/target/release/libtaskchampion_ffi.a"
 if [ ! -f "${HOST_LIB}" ]; then
-  # Fallback: try dylib
-  HOST_LIB="${PROJECT_ROOT}/target/release/libtaskchampion_ffi.dylib"
+  echo "ERROR: staticlib not found at ${HOST_LIB} — cargo build may have failed" >&2
+  exit 1
 fi
 
 mkdir -p "${SWIFT_OUT_DIR}"

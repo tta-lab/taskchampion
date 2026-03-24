@@ -22,6 +22,8 @@ let package = Package(
         ),
         // Pre-built static library + C headers.
         // Downloaded from GitHub Releases. The release workflow auto-updates url + checksum.
+        // NOTE: Placeholder values below — auto-replaced by release workflow on each tag push.
+        // Do NOT use the main branch as an SPM dependency; always pin to a tagged version.
         .binaryTarget(
             name: "TaskChampionFFIFFI",
             url: "https://github.com/tta-lab/taskchampion/releases/download/v0.0.0/TaskChampionFFIFFI.xcframework.zip",
