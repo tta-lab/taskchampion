@@ -134,4 +134,5 @@ echo "==> Done!"
 echo "    XCFramework: ${XCFRAMEWORK_DIR}"
 echo "    Swift sources: ${SWIFT_OUT_DIR}/TaskChampionFFI.swift"
 echo ""
-echo "    Add to fn-ios as a local SPM package pointing to this repo root."
+echo "    Tag a version and push to create a GitHub Release. SPM consumers add:
+    https://github.com/tta-lab/taskchampion.git"
