@@ -21,10 +21,11 @@ let package = Package(
             path: "Sources/TaskChampionFFI"
         ),
         // Pre-built static library + C headers.
-        // Run scripts/build_xcframework.sh to generate TaskChampionFFIFFI.xcframework.
+        // Downloaded from GitHub Releases. The release workflow auto-updates url + checksum.
         .binaryTarget(
             name: "TaskChampionFFIFFI",
-            path: "TaskChampionFFIFFI.xcframework"
+            url: "https://github.com/tta-lab/taskchampion/releases/download/v0.0.0/TaskChampionFFIFFI.xcframework.zip",
+            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         ),
     ]
 )
